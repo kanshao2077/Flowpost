@@ -4,6 +4,8 @@ FlowPost 是一个本地优先的 Chrome / Edge 内容分发插件，用来把�
 
 第一版支持 X / Twitter、即刻、Substack Notes 和 LinkedIn。它不做账号托管、不保存平台密码，只使用你已经在浏览器里登录好的账号状态。
 
+![FlowPost 界面](https://pbs.twimg.com/media/HJc-AKKaEAEzUmS?format=jpg&name=4096x4096)
+
 ## Features
 
 - Full-page extension workspace instead of a cramped popup.
