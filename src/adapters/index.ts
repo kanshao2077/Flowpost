@@ -113,7 +113,10 @@ const jikeAdapter = createGenericAdapter({
   loginTexts: ["登录", "注册"],
   afterFill: selectJikeCircle,
   afterFillDelayMs: 1_600,
-  editorTimeoutMs: 20_000
+  editorTimeoutMs: 20_000,
+  disableLineByLineText: true,
+  directDuplicateRepair: true,
+  verifyTextAfterFill: false
 });
 
 const substackAdapter = createGenericAdapter({
@@ -173,7 +176,7 @@ async function selectJikeCircle(payload: PlatformFillPayload): Promise<string | 
   if (exactVisibleChip) {
     clickElement(exactVisibleChip);
     await sleep(600);
-    return undefined;
+    return await waitForJikeCircleSelected(matchTerms) ? undefined : `已点击即刻圈子「${circle}」，但未确认选中，需要手动检查`;
   }
 
   const pickerOpened = await openJikeCirclePicker(matchTerms);
@@ -185,7 +188,7 @@ async function selectJikeCircle(payload: PlatformFillPayload): Promise<string | 
   if (optionBeforeSearch) {
     clickElement(optionBeforeSearch);
     await sleep(600);
-    return undefined;
+    return await waitForJikeCircleSelected(matchTerms) ? undefined : `已点击即刻圈子「${circle}」，但未确认选中，需要手动检查`;
   }
 
   const searchTerms = getJikeCircleSearchTerms(circle);
@@ -206,7 +209,7 @@ async function selectJikeCircle(payload: PlatformFillPayload): Promise<string | 
     if (option) {
       clickElement(option);
       await sleep(600);
-      return undefined;
+      return await waitForJikeCircleSelected(matchTerms) ? undefined : `已点击即刻圈子「${circle}」，但未确认选中，需要手动检查`;
     }
   }
 
@@ -217,7 +220,7 @@ async function selectJikeCircle(payload: PlatformFillPayload): Promise<string | 
     if (match) {
       clickElement(match);
       await sleep(600);
-      return undefined;
+      return await waitForJikeCircleSelected(matchTerms) ? undefined : `已点击即刻圈子「${circle}」，但未确认选中，需要手动检查`;
     }
   }
 
@@ -234,7 +237,7 @@ function fixDuplicatedJikeText(expectedText: string): void {
   ]);
   if (!editor) return;
 
-  repairEditableTextIfDuplicated(editor, expectedText);
+  repairEditableTextIfDuplicated(editor, expectedText, { disableLineByLine: true, forceDirect: true });
 }
 
 async function openJikeCirclePicker(candidates: string[]): Promise<boolean> {
@@ -256,6 +259,18 @@ async function openJikeCirclePicker(candidates: string[]): Promise<boolean> {
     }
 
     await sleep(300);
+  }
+
+  return false;
+}
+
+async function waitForJikeCircleSelected(candidates: string[], timeoutMs = 1_800): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const selected = findJikeSelectedCircleByCandidates(candidates);
+    if (selected) return true;
+    await sleep(180);
   }
 
   return false;
@@ -392,7 +407,7 @@ function findJikeScrollableCircleContainers(): HTMLElement[] {
         element.scrollWidth > element.clientWidth + 8 &&
         rect.height >= 24 &&
         rect.height <= 96 &&
-        (!text || /未选择圈子|选择圈子|不好笑|今天|一起|汪星|运动|有谁|惨|圈子/.test(text));
+        (!text || /未选择圈子|选择圈子|一个想法|社会新闻|黑色幽默|即友日记本|自我管理|互联网报道|买买买|生活小姿势|还有这种操作|读书会|ai探索站|有谁比我惨|不好笑|一起|圈子/.test(text));
 
       if (looksLikeCircleRow) containers.add(element);
     }
@@ -428,7 +443,34 @@ function findJikeCircleTrigger(): HTMLElement | undefined {
   const layoutTrigger = findJikeCircleTriggerByLayout(composer ?? document.body);
   if (layoutTrigger) return layoutTrigger;
 
-  return findJikeUnlabeledTopicTrigger(composer ?? document.body);
+  return findJikeCurrentCircleTrigger() ?? findJikeUnlabeledTopicTrigger(composer ?? document.body);
+}
+
+function findJikeCurrentCircleTrigger(): HTMLElement | undefined {
+  const rows = findJikeScrollableCircleContainers();
+
+  for (const row of rows) {
+    const rowRect = row.getBoundingClientRect();
+    const candidates = Array.from(row.querySelectorAll<HTMLElement>("[class*='item'], button, [role='button'], div, span"))
+      .filter((element) => {
+        if (!isVisible(element)) return false;
+        const rect = element.getBoundingClientRect();
+        const label = normalizeJikeLabel(getJikeElementLabel(element));
+        const pillSized = rect.width >= 48 && rect.width <= 230 && rect.height >= 24 && rect.height <= 64;
+        const insideRow = rect.left >= rowRect.left - 4 && rect.right <= rowRect.right + 4;
+        return pillSized && insideRow && !/发送|图片|视频|链接/.test(label);
+      })
+      .sort((left, right) => {
+        const leftRect = left.getBoundingClientRect();
+        const rightRect = right.getBoundingClientRect();
+        if (Math.abs(leftRect.top - rightRect.top) > 8) return leftRect.top - rightRect.top;
+        return leftRect.left - rightRect.left;
+      });
+
+    if (candidates[0]) return toJikeClickableElement(candidates[0]);
+  }
+
+  return undefined;
 }
 
 function findJikeComposer(): HTMLElement | undefined {
@@ -468,7 +510,7 @@ function findJikeUnlabeledTopicTrigger(root: HTMLElement): HTMLElement | undefin
     .find((element) => {
       const rect = element.getBoundingClientRect();
       const label = normalizeJikeLabel(element.textContent ?? "");
-      return rect.width >= 48 && rect.width <= 180 && rect.height >= 24 && rect.height <= 64 && (!label || /未选择圈子|选择圈子/.test(label));
+      return rect.width >= 48 && rect.width <= 180 && rect.height >= 24 && rect.height <= 64 && (!label || !/发送|图片|视频|链接/.test(label));
     });
 
   if (rowWithFirstItem) return toJikeClickableElement(rowWithFirstItem);
@@ -482,7 +524,7 @@ function findJikeUnlabeledTopicTrigger(root: HTMLElement): HTMLElement | undefin
       .filter(isVisible)
       .find((element) => {
         const label = normalizeJikeLabel(element.textContent ?? "");
-        return !label || /未选择圈子|选择圈子/.test(label);
+        return !label || !/发送|图片|视频|链接/.test(label);
       });
 
     if (firstItem) return toJikeClickableElement(firstItem);
@@ -622,6 +664,17 @@ function findJikeCircleOptionByCandidates(candidates: string[]): HTMLElement | u
   return undefined;
 }
 
+function findJikeSelectedCircleByCandidates(candidates: string[]): HTMLElement | undefined {
+  const wanted = candidates.map(normalizeJikeLabel);
+  const currentTrigger = findJikeCurrentCircleTrigger();
+  if (currentTrigger) {
+    const label = normalizeJikeLabel(getJikeElementLabel(currentTrigger));
+    if (wanted.some((candidate) => label === candidate || label.includes(candidate))) return currentTrigger;
+  }
+
+  return undefined;
+}
+
 function findJikeCircleOption(circle: string): HTMLElement | undefined {
   const option =
     findVisibleElementByExactText<HTMLElement>(
@@ -641,6 +694,7 @@ function getJikeCircleSearchTerms(circle: string): string[] {
   const terms = [
     circle.replace(/不一定对$/, ""),
     circle.replace(/^一个/, ""),
+    circle.replace(/\s+/g, ""),
     circle
   ];
 
@@ -650,6 +704,7 @@ function getJikeCircleSearchTerms(circle: string): string[] {
 function getJikeCircleMatchTerms(circle: string): string[] {
   const terms = [
     circle,
+    circle.replace(/\s+/g, ""),
     circle.replace(/^一个/, ""),
     circle.replace(/不一定对$/, "")
   ];

@@ -4,6 +4,8 @@ export const DEFAULT_TIMEOUT_MS = 18_000;
 
 export interface EditableTextOptions {
   preferLineByLine?: boolean;
+  disableLineByLine?: boolean;
+  forceDirect?: boolean;
 }
 
 export function sleep(ms: number): Promise<void> {
@@ -222,7 +224,19 @@ export function setEditableText(element: Element, text: string, options: Editabl
   element.scrollIntoView({ block: "center", inline: "nearest" });
   element.focus();
 
-  if ((options.preferLineByLine || text.includes("\n")) && text.includes("\n") && setContentEditableTextLineByLine(element, text)) {
+  if (options.forceDirect) {
+    setContentEditableTextDirectly(element, text);
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: text }));
+    dispatchTextCommitEvents(element);
+    return;
+  }
+
+  if (
+    !options.disableLineByLine &&
+    (options.preferLineByLine || text.includes("\n")) &&
+    text.includes("\n") &&
+    setContentEditableTextLineByLine(element, text)
+  ) {
     dispatchTextCommitEvents(element);
     return;
   }
@@ -230,7 +244,7 @@ export function setEditableText(element: Element, text: string, options: Editabl
   selectEditableContents(element);
   const inserted = document.execCommand("insertText", false, text);
   if (!inserted) {
-    if (!setContentEditableTextLineByLine(element, text)) {
+    if (options.disableLineByLine || !setContentEditableTextLineByLine(element, text)) {
       setContentEditableTextDirectly(element, text);
       element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: text }));
     }
@@ -246,7 +260,7 @@ export async function ensureEditableTextMatches(
 ): Promise<boolean> {
   if (isEditableTextMatch(element, expectedText)) return true;
 
-  const retryOptions = { ...options, preferLineByLine: true };
+  const retryOptions = { ...options, preferLineByLine: !options.disableLineByLine };
   setEditableText(element, expectedText, retryOptions);
   await sleep(350);
 

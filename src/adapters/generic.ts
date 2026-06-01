@@ -40,6 +40,9 @@ export interface PlatformAdapterConfig {
   afterOpenDelayMs?: number;
   afterFillDelayMs?: number;
   preferLineByLineText?: boolean;
+  disableLineByLineText?: boolean;
+  directDuplicateRepair?: boolean;
+  verifyTextAfterFill?: boolean;
 }
 
 const BUTTON_LIKE_SELECTORS = ["button", "[role='button']", "a", "div[role='button']"];
@@ -60,18 +63,28 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
         if (beforeFillWarning) warnings.push(beforeFillWarning);
 
         const editor = await waitForAnyVisible(config.editorSelectors, config.editorTimeoutMs ?? 18_000);
-        setEditableText(editor, payload.text, { preferLineByLine: config.preferLineByLineText });
+        const textOptions = {
+          preferLineByLine: config.preferLineByLineText,
+          disableLineByLine: config.disableLineByLineText
+        };
+        setEditableText(editor, payload.text, textOptions);
         await sleep(config.afterFillDelayMs ?? 700);
 
-        if (repairEditableTextIfDuplicated(editor, payload.text, { preferLineByLine: true })) {
+        if (
+          repairEditableTextIfDuplicated(editor, payload.text, {
+            ...textOptions,
+            preferLineByLine: config.directDuplicateRepair ? false : true,
+            forceDirect: config.directDuplicateRepair
+          })
+        ) {
           await sleep(350);
         }
 
-        const fullTextFilled = await ensureEditableTextMatches(editor, payload.text, {
-          preferLineByLine: config.preferLineByLineText
-        });
-        if (!fullTextFilled) {
-          return result(config.id, "manual", `${config.label} 文本没有完整填入，已停在草稿页，请手动检查后再发布。`);
+        if (config.verifyTextAfterFill !== false) {
+          const fullTextFilled = await ensureEditableTextMatches(editor, payload.text, textOptions);
+          if (!fullTextFilled) {
+            return result(config.id, "manual", `${config.label} 文本没有完整填入，已停在草稿页，请手动检查后再发布。`);
+          }
         }
 
         const afterFillWarning = await runOptionalStep(config.afterFill, payload);
