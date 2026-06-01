@@ -37,7 +37,8 @@ const xAdapter = createGenericAdapter({
   publishTexts: ["Post", "Tweet", "发布"],
   loginSelectors: ["[data-testid='loginButton']", "a[href='/login']", "input[name='text']"],
   loginTexts: ["Log in", "Sign in", "登录"],
-  editorTimeoutMs: 20_000
+  editorTimeoutMs: 20_000,
+  preferLineByLineText: true
 });
 
 const linkedinAdapter = createGenericAdapter({

@@ -4,6 +4,7 @@ import {
   clickElement,
   clickFirstAvailable,
   describeError,
+  ensureEditableTextMatches,
   findVisibleElementByText,
   isDisabled,
   queryFirstVisible,
@@ -38,6 +39,7 @@ export interface PlatformAdapterConfig {
   editorTimeoutMs?: number;
   afterOpenDelayMs?: number;
   afterFillDelayMs?: number;
+  preferLineByLineText?: boolean;
 }
 
 const BUTTON_LIKE_SELECTORS = ["button", "[role='button']", "a", "div[role='button']"];
@@ -58,10 +60,18 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
         if (beforeFillWarning) warnings.push(beforeFillWarning);
 
         const editor = await waitForAnyVisible(config.editorSelectors, config.editorTimeoutMs ?? 18_000);
-        setEditableText(editor, payload.text);
+        setEditableText(editor, payload.text, { preferLineByLine: config.preferLineByLineText });
         await sleep(config.afterFillDelayMs ?? 700);
-        if (repairEditableTextIfDuplicated(editor, payload.text)) {
+
+        if (repairEditableTextIfDuplicated(editor, payload.text, { preferLineByLine: true })) {
           await sleep(350);
+        }
+
+        const fullTextFilled = await ensureEditableTextMatches(editor, payload.text, {
+          preferLineByLine: config.preferLineByLineText
+        });
+        if (!fullTextFilled) {
+          return result(config.id, "manual", `${config.label} 文本没有完整填入，已停在草稿页，请手动检查后再发布。`);
         }
 
         const afterFillWarning = await runOptionalStep(config.afterFill, payload);

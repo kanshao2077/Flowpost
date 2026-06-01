@@ -2,6 +2,10 @@ import type { MediaAttachment } from "../shared/types";
 
 export const DEFAULT_TIMEOUT_MS = 18_000;
 
+export interface EditableTextOptions {
+  preferLineByLine?: boolean;
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -200,7 +204,7 @@ export async function clickFirstAvailable(config: {
   return undefined;
 }
 
-export function setEditableText(element: Element, text: string): void {
+export function setEditableText(element: Element, text: string, options: EditableTextOptions = {}): void {
   if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
     element.scrollIntoView({ block: "center", inline: "nearest" });
     element.focus();
@@ -218,42 +222,48 @@ export function setEditableText(element: Element, text: string): void {
   element.scrollIntoView({ block: "center", inline: "nearest" });
   element.focus();
 
-  const selection = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  selection?.removeAllRanges();
-  selection?.addRange(range);
+  if ((options.preferLineByLine || text.includes("\n")) && text.includes("\n") && setContentEditableTextLineByLine(element, text)) {
+    dispatchTextCommitEvents(element);
+    return;
+  }
 
-  document.execCommand("selectAll", false);
-
+  selectEditableContents(element);
   const inserted = document.execCommand("insertText", false, text);
   if (!inserted) {
-    setContentEditableTextDirectly(element, text);
-    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: text }));
+    if (!setContentEditableTextLineByLine(element, text)) {
+      setContentEditableTextDirectly(element, text);
+      element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: text }));
+    }
   }
 
   dispatchTextCommitEvents(element);
 }
 
-export function repairEditableTextIfDuplicated(element: Element, expectedText: string): boolean {
+export async function ensureEditableTextMatches(
+  element: Element,
+  expectedText: string,
+  options: EditableTextOptions = {}
+): Promise<boolean> {
+  if (isEditableTextMatch(element, expectedText)) return true;
+
+  const retryOptions = { ...options, preferLineByLine: true };
+  setEditableText(element, expectedText, retryOptions);
+  await sleep(350);
+
+  return isEditableTextMatch(element, expectedText);
+}
+
+export function repairEditableTextIfDuplicated(
+  element: Element,
+  expectedText: string,
+  options: EditableTextOptions = {}
+): boolean {
   const expected = normalizeEditableSnapshot(expectedText);
   const actual = normalizeEditableSnapshot(getEditablePlainText(element));
 
   if (!expected || actual !== `${expected}${expected}`) return false;
 
-  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
-    const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value");
-    descriptor?.set?.call(element, expectedText);
-    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: expectedText }));
-    dispatchTextCommitEvents(element);
-    return true;
-  }
-
-  if (!(element instanceof HTMLElement)) return false;
-
-  setContentEditableTextDirectly(element, expectedText);
-  element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: expectedText }));
-  dispatchTextCommitEvents(element);
+  setEditableText(element, expectedText, { ...options, preferLineByLine: true });
   return true;
 }
 
@@ -268,9 +278,50 @@ function setContentEditableTextDirectly(element: HTMLElement, text: string): voi
   element.append(document.createTextNode(text));
 }
 
+function setContentEditableTextLineByLine(element: HTMLElement, text: string): boolean {
+  const normalizedText = text.replace(/\r\n?/g, "\n");
+  const lines = normalizedText.split("\n");
+  let commandFailed = false;
+
+  selectEditableContents(element);
+  const deleted = document.execCommand("delete", false);
+  if (!deleted) {
+    setContentEditableTextDirectly(element, "");
+  }
+
+  for (let index = 0; index < lines.length; index += 1) {
+    if (index > 0) {
+      const lineBreakInserted =
+        document.execCommand("insertLineBreak", false) || document.execCommand("insertParagraph", false);
+      if (!lineBreakInserted) commandFailed = true;
+    }
+
+    const line = lines[index];
+    if (line) {
+      const lineInserted = document.execCommand("insertText", false, line);
+      if (!lineInserted) commandFailed = true;
+    }
+  }
+
+  return !commandFailed;
+}
+
+function selectEditableContents(element: HTMLElement): void {
+  element.focus();
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
 function dispatchTextCommitEvents(element: Element): void {
   element.dispatchEvent(new Event("change", { bubbles: true }));
   element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+}
+
+function isEditableTextMatch(element: Element, expectedText: string): boolean {
+  return normalizeEditableSnapshot(getEditablePlainText(element)) === normalizeEditableSnapshot(expectedText);
 }
 
 function normalizeEditableSnapshot(text: string): string {
