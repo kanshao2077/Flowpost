@@ -137,6 +137,34 @@ npm install
 npm run build
 ```
 
+### 如果有 GitHub Release 怎么用
+
+以后如果 Release 里提供了这个文件：
+
+```text
+flowpost-0.1.0-chrome.zip
+```
+
+你可以直接下载它，解压后在 Chrome 里「加载已解压的扩展程序」。
+
+这种方式不用 `npm install`，也不用 `npm run build`。它适合只想安装插件、不想折腾源码的人。
+
+### 发布 Release 时要上传什么
+
+每次准备发版本，先执行：
+
+```bash
+npm run zip
+```
+
+然后把生成的这个文件上传到 GitHub Release：
+
+```text
+.output/flowpost-0.1.0-chrome.zip
+```
+
+版本号变化后，文件名里的 `0.1.0` 也会跟着变。Release 里除了源码包，还要额外放这个 zip，方便新电脑直接下载使用。
+
 ### 为什么不把 `node_modules`、`.output` 上传到 GitHub
 
 这些是本机生成物，不适合放进代码仓库。
