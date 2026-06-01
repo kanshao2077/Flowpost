@@ -6,7 +6,7 @@ export default defineConfig({
     name: "来一发 FlowPost",
     description: "Fill and optionally publish text plus up to nine images to X, LinkedIn, Jike, and Substack Notes.",
     version: "0.1.0",
-    permissions: ["storage", "tabs", "windows", "unlimitedStorage"],
+    permissions: ["storage", "tabs", "tabGroups", "windows", "unlimitedStorage"],
     host_permissions: [
       "https://x.com/*",
       "https://twitter.com/*",

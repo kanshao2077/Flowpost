@@ -7,6 +7,7 @@ import {
   findVisibleElementByText,
   isDisabled,
   queryFirstVisible,
+  repairEditableTextIfDuplicated,
   setEditableText,
   sleep,
   uploadImagesFromDataUrls,
@@ -47,7 +48,7 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
     async fill(payload) {
       try {
         if (looksLoggedOut(config) && !queryFirstVisible(config.editorSelectors)) {
-          return result(config.id, "needs-login", `${config.label} 未检测到登录后的发布框，请先登录。`);
+          return result(config.id, "needs-login", makeLoginMessage(config.label));
         }
 
         await openComposerIfNeeded(config);
@@ -59,6 +60,9 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
         const editor = await waitForAnyVisible(config.editorSelectors, config.editorTimeoutMs ?? 18_000);
         setEditableText(editor, payload.text);
         await sleep(config.afterFillDelayMs ?? 700);
+        if (repairEditableTextIfDuplicated(editor, payload.text)) {
+          await sleep(350);
+        }
 
         const afterFillWarning = await runOptionalStep(config.afterFill, payload);
         if (afterFillWarning) warnings.push(afterFillWarning);
@@ -101,7 +105,7 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
         return result(config.id, "published", `${config.label} 已点击发布按钮。`);
       } catch (error) {
         if (looksLoggedOut(config)) {
-          return result(config.id, "needs-login", `${config.label} 需要先在浏览器里登录。`);
+          return result(config.id, "needs-login", makeLoginMessage(config.label));
         }
 
         return result(config.id, "failed", `${config.label} 处理失败：${describeError(error)}`);
@@ -165,6 +169,10 @@ function looksLoggedOut(config: PlatformAdapterConfig): boolean {
     : undefined;
 
   return Boolean(textMatch);
+}
+
+function makeLoginMessage(label: string): string {
+  return `${label} 需要先登录：请在刚打开的 ${label} 标签页完成登录，再回到 FlowPost 重新开始分发。FlowPost 不保存账号密码。`;
 }
 
 function result(platform: PlatformId, status: PlatformResult["status"], message: string): PlatformResult {

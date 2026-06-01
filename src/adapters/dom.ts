@@ -207,8 +207,7 @@ export function setEditableText(element: Element, text: string): void {
     const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value");
     descriptor?.set?.call(element, text);
     element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-    element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+    dispatchTextCommitEvents(element);
     return;
   }
 
@@ -229,16 +228,53 @@ export function setEditableText(element: Element, text: string): void {
 
   const inserted = document.execCommand("insertText", false, text);
   if (!inserted) {
-    element.textContent = "";
-    element.innerHTML = "";
-    element.textContent = text;
-    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
-  } else {
-    element.dispatchEvent(new Event("input", { bubbles: true }));
+    setContentEditableTextDirectly(element, text);
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: text }));
   }
 
+  dispatchTextCommitEvents(element);
+}
+
+export function repairEditableTextIfDuplicated(element: Element, expectedText: string): boolean {
+  const expected = normalizeEditableSnapshot(expectedText);
+  const actual = normalizeEditableSnapshot(getEditablePlainText(element));
+
+  if (!expected || actual !== `${expected}${expected}`) return false;
+
+  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+    const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value");
+    descriptor?.set?.call(element, expectedText);
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: expectedText }));
+    dispatchTextCommitEvents(element);
+    return true;
+  }
+
+  if (!(element instanceof HTMLElement)) return false;
+
+  setContentEditableTextDirectly(element, expectedText);
+  element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: expectedText }));
+  dispatchTextCommitEvents(element);
+  return true;
+}
+
+export function getEditablePlainText(element: Element): string {
+  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return element.value;
+  return element.textContent ?? "";
+}
+
+function setContentEditableTextDirectly(element: HTMLElement, text: string): void {
+  element.textContent = "";
+  element.innerHTML = "";
+  element.append(document.createTextNode(text));
+}
+
+function dispatchTextCommitEvents(element: Element): void {
   element.dispatchEvent(new Event("change", { bubbles: true }));
   element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+}
+
+function normalizeEditableSnapshot(text: string): string {
+  return text.replace(/\u200b/g, "").replace(/\s+/g, "").trim();
 }
 
 export function dataUrlToFile(image: MediaAttachment): File {

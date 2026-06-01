@@ -7,6 +7,7 @@ import {
   findVisibleElementByText,
   isVisible,
   queryFirstVisible,
+  repairEditableTextIfDuplicated,
   setEditableText,
   sleep
 } from "./dom";
@@ -232,11 +233,7 @@ function fixDuplicatedJikeText(expectedText: string): void {
   ]);
   if (!editor) return;
 
-  const actual = normalizeJikePlainText(editor instanceof HTMLInputElement || editor instanceof HTMLTextAreaElement ? editor.value : editor.textContent ?? "");
-  const expected = normalizeJikePlainText(expectedText);
-  if (expected && actual === `${expected}${expected}`) {
-    setEditableText(editor, expectedText);
-  }
+  repairEditableTextIfDuplicated(editor, expectedText);
 }
 
 async function openJikeCirclePicker(candidates: string[]): Promise<boolean> {
@@ -372,10 +369,6 @@ function getJikeElementLabel(element: HTMLElement): string {
 
 function normalizeJikeLabel(text: string): string {
   return text.replace(/\s+/g, "").trim().toLowerCase();
-}
-
-function normalizeJikePlainText(text: string): string {
-  return text.replace(/\u200b/g, "").replace(/\s+/g, "").trim();
 }
 
 function findJikeScrollableCircleContainers(): HTMLElement[] {

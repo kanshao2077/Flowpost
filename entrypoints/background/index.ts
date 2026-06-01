@@ -76,6 +76,8 @@ async function runDistribution(request: DistributionRequest): Promise<JobState> 
 
   await saveJobState(job);
 
+  let tabGroupId: number | undefined;
+
   for (const platform of request.platforms) {
     const definition = getPlatform(platform);
     job = upsertResult(job, makeResult(platform, "opening", `正在打开 ${definition.label}。`, undefined, definition.composeUrl));
@@ -84,6 +86,8 @@ async function runDistribution(request: DistributionRequest): Promise<JobState> 
     try {
       const tab = await browser.tabs.create({ url: definition.composeUrl, active: true });
       if (!tab.id) throw new Error("浏览器没有返回新标签页 ID");
+
+      tabGroupId = await addTabToDistributionGroup(tab.id, tabGroupId);
 
       job = upsertResult(
         job,
@@ -125,6 +129,26 @@ async function runDistribution(request: DistributionRequest): Promise<JobState> 
 
   await saveJobState(job);
   return job;
+}
+
+async function addTabToDistributionGroup(tabId: number, groupId: number | undefined): Promise<number | undefined> {
+  try {
+    const nextGroupId =
+      groupId === undefined
+        ? await browser.tabs.group({ tabIds: tabId })
+        : await browser.tabs.group({ groupId, tabIds: tabId });
+
+    if (groupId === undefined) {
+      await browser.tabGroups.update(nextGroupId, {
+        title: "FlowPost 分发",
+        color: "yellow"
+      });
+    }
+
+    return nextGroupId;
+  } catch {
+    return groupId;
+  }
 }
 
 async function waitForTabComplete(tabId: number, timeoutMs = 45_000): Promise<void> {
