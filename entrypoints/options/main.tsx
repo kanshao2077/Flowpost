@@ -9,12 +9,18 @@ import {
   Play,
   Search,
   Send,
+  Square,
   SquarePen,
   Upload
 } from "lucide-react";
 import { browser } from "wxt/browser";
 import "./style.css";
-import { MESSAGE_TYPES, type StartDistributionResponse } from "../../src/shared/messages";
+import {
+  MESSAGE_TYPES,
+  type CheckLoginsResponse,
+  type StartDistributionResponse,
+  type StopDistributionResponse
+} from "../../src/shared/messages";
 import {
   DEFAULT_JIKE_CIRCLE,
   DEFAULT_PLATFORMS,
@@ -74,6 +80,8 @@ function App(): React.JSX.Element {
   const [circleQuery, setCircleQuery] = useState("");
   const [job, setJob] = useState<JobState | undefined>();
   const [error, setError] = useState<string | undefined>();
+  const [loginResults, setLoginResults] = useState<Partial<Record<PlatformId, PlatformResult>>>({});
+  const [loginChecking, setLoginChecking] = useState(false);
   const [ready, setReady] = useState(false);
   const [draggedImageId, setDraggedImageId] = useState<string | undefined>();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -298,7 +306,61 @@ function App(): React.JSX.Element {
       return;
     }
 
+    if (response.job) {
+      setJob((current) => (current?.id && current.id !== request.id ? current : response.job));
+    }
+  }
+
+  async function stopDistribution(): Promise<void> {
+    setError(undefined);
+
+    const response = (await browser.runtime.sendMessage({
+      type: MESSAGE_TYPES.STOP_DISTRIBUTION
+    })) as StopDistributionResponse;
+
+    if (!response.ok) {
+      setError(response.error ?? "停止分发失败。");
+      return;
+    }
+
     if (response.job) setJob(response.job);
+  }
+
+  async function checkLogins(): Promise<void> {
+    setError(undefined);
+
+    if (!selectedPlatforms.length) {
+      setError("至少选择一个平台。");
+      return;
+    }
+
+    setLoginChecking(true);
+    setLoginResults({});
+
+    let response: CheckLoginsResponse;
+    try {
+      response = (await browser.runtime.sendMessage({
+        type: MESSAGE_TYPES.CHECK_LOGINS,
+        payload: { platforms: selectedPlatforms }
+      })) as CheckLoginsResponse;
+    } catch (error) {
+      setLoginChecking(false);
+      setError(error instanceof Error ? error.message : "登录检查失败。");
+      return;
+    }
+
+    setLoginChecking(false);
+
+    if (!response.ok) {
+      setError(response.error ?? "登录检查失败。");
+      return;
+    }
+
+    setLoginResults(
+      Object.fromEntries((response.results ?? []).map((result) => [result.platform, result])) as Partial<
+        Record<PlatformId, PlatformResult>
+      >
+    );
   }
 
   return (
@@ -442,9 +504,14 @@ function App(): React.JSX.Element {
               </div>
             </div>
 
-            <button className="start-button" type="button" disabled={!canStart} onClick={startDistribution}>
-              <Play size={18} />
-              <span>{isRunning ? "分发中" : "开始分发"}</span>
+            <button
+              className={`start-button ${isRunning ? "stop-button" : ""}`}
+              type="button"
+              disabled={!isRunning && !canStart}
+              onClick={isRunning ? stopDistribution : startDistribution}
+            >
+              {isRunning ? <Square size={18} /> : <Play size={18} />}
+              <span>{isRunning ? "停止分发" : "开始分发"}</span>
             </button>
           </aside>
         </div>
@@ -452,25 +519,35 @@ function App(): React.JSX.Element {
         <section className="module platform-module">
           <div className="module-head">
             <span>平台</span>
-            <button className="micro-button" type="button" onClick={() => setSelectedPlatforms(DEFAULT_PLATFORMS)}>
-              全选
-            </button>
+            <div className="platform-actions">
+              <button className="micro-button" type="button" onClick={checkLogins} disabled={isRunning || loginChecking}>
+                <Search size={13} />
+                <span>{loginChecking ? "检查中" : "检查登录"}</span>
+              </button>
+              <button className="micro-button" type="button" onClick={() => setSelectedPlatforms(DEFAULT_PLATFORMS)}>
+                全选
+              </button>
+            </div>
           </div>
           <div className="platform-grid">
             {PLATFORM_ORDER.map((platform) => {
               const definition = getPlatform(platform);
               const selected = selectedPlatforms.includes(platform);
+              const loginResult = loginResults[platform];
               return (
                 <button
                   key={platform}
-                  className={`platform-tile ${selected ? "selected" : ""}`}
+                  className={`platform-tile ${selected ? "selected" : ""} ${loginResult ? `login-${loginResult.status}` : ""}`}
                   style={{ "--accent": definition.accent } as CSSProperties}
                   type="button"
                   onClick={() => togglePlatform(platform)}
                   aria-pressed={selected}
                 >
                   <span className="platform-mark">{definition.shortLabel}</span>
-                  <span>{definition.label}</span>
+                  <span className="platform-label">
+                    <span>{definition.label}</span>
+                    {loginResult ? <small>{formatLoginStatus(loginResult)}</small> : null}
+                  </span>
                 </button>
               );
             })}
@@ -558,7 +635,7 @@ function App(): React.JSX.Element {
         <section className="module log">
           <div className="module-head">
             <span>日志</span>
-            <span className="job-state">{job?.status ?? "idle"}</span>
+            <span className="job-state">{formatJobStatus(job?.status)}</span>
           </div>
           {latestResults.length ? (
             <div className="result-list">
@@ -612,7 +689,11 @@ function ResultRow({ result }: { result: PlatformResult }): React.JSX.Element {
   return (
     <div className={`result-row ${tone}`}>
       <span className="result-icon">
-        {result.status === "filled" || result.status === "published" ? <CheckCircle2 size={15} /> : <span />}
+        {result.status === "ready" || result.status === "filled" || result.status === "published" ? (
+          <CheckCircle2 size={15} />
+        ) : (
+          <span />
+        )}
       </span>
       <div>
         <strong>{definition.label}</strong>
@@ -620,6 +701,22 @@ function ResultRow({ result }: { result: PlatformResult }): React.JSX.Element {
       </div>
     </div>
   );
+}
+
+function formatLoginStatus(result: PlatformResult): string {
+  if (result.status === "ready") return "已登录";
+  if (result.status === "needs-login") return "需要登录";
+  if (result.status === "manual") return "需确认";
+  if (result.status === "failed") return "检查失败";
+  return result.message;
+}
+
+function formatJobStatus(status: JobState["status"] | undefined): string {
+  if (!status) return "idle";
+  if (status === "running") return "running";
+  if (status === "complete") return "complete";
+  if (status === "cancelled") return "stopped";
+  return "failed";
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {

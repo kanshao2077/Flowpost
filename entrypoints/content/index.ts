@@ -1,6 +1,11 @@
 import { browser } from "wxt/browser";
 import { getAdapter } from "../../src/adapters";
-import { isFillPlatformMessage, type FillPlatformResponse } from "../../src/shared/messages";
+import {
+  isCheckPlatformLoginMessage,
+  isFillPlatformMessage,
+  type CheckPlatformLoginResponse,
+  type FillPlatformResponse
+} from "../../src/shared/messages";
 
 export default defineContentScript({
   matches: [
@@ -15,6 +20,19 @@ export default defineContentScript({
   runAt: "document_idle",
   main() {
     browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (isCheckPlatformLoginMessage(message)) {
+        void getAdapter(message.payload.platform)
+          .checkLogin()
+          .then((result): CheckPlatformLoginResponse => ({ ok: true, result }))
+          .catch((error): CheckPlatformLoginResponse => {
+            const detail = error instanceof Error ? error.message : String(error);
+            return { ok: false, error: detail };
+          })
+          .then(sendResponse);
+
+        return true;
+      }
+
       if (!isFillPlatformMessage(message)) return undefined;
 
       void getAdapter(message.payload.platform)

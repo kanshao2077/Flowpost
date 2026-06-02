@@ -18,6 +18,7 @@ import {
 
 export interface PlatformAdapter {
   id: PlatformId;
+  checkLogin(): Promise<PlatformResult>;
   fill(payload: PlatformFillPayload): Promise<PlatformResult>;
 }
 
@@ -50,6 +51,32 @@ const BUTTON_LIKE_SELECTORS = ["button", "[role='button']", "a", "div[role='butt
 export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAdapter {
   return {
     id: config.id,
+    async checkLogin() {
+      try {
+        if (looksLoggedOut(config) && !queryFirstVisible(config.editorSelectors)) {
+          return result(config.id, "needs-login", makeLoginMessage(config.label));
+        }
+
+        await openComposerIfNeeded(config);
+
+        const editor = await waitForAnyVisible(config.editorSelectors, Math.min(config.editorTimeoutMs ?? 18_000, 10_000));
+        if (editor && !looksLoggedOut(config)) {
+          return result(config.id, "ready", `${config.label} 已登录，可以开始分发。`);
+        }
+
+        return result(config.id, "needs-login", makeLoginMessage(config.label));
+      } catch (error) {
+        if (looksLoggedOut(config)) {
+          return result(config.id, "needs-login", makeLoginMessage(config.label));
+        }
+
+        return result(
+          config.id,
+          "manual",
+          `${config.label} 无法自动确认登录状态：${describeError(error)}。请在打开的标签页确认已登录。`
+        );
+      }
+    },
     async fill(payload) {
       try {
         if (looksLoggedOut(config) && !queryFirstVisible(config.editorSelectors)) {

@@ -5,10 +5,12 @@ export type PublishMode = "draft" | "auto";
 export type PlatformStatus =
   | "queued"
   | "opening"
+  | "ready"
   | "filled"
   | "published"
   | "manual"
   | "needs-login"
+  | "cancelled"
   | "failed";
 
 export interface PlatformDefinition {
@@ -45,7 +47,7 @@ export const PLATFORMS: Record<PlatformId, PlatformDefinition> = {
     id: "substack",
     label: "Substack Notes",
     shortLabel: "S",
-    composeUrl: "https://substack.com/home",
+    composeUrl: "https://substack.com/",
     accent: "#ff6719"
   }
 };

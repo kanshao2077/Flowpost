@@ -620,6 +620,15 @@ input:focus-visible {
   background: #252820;
 }
 
+.start-button.stop-button {
+  background: var(--red);
+  color: white;
+}
+
+.start-button.stop-button:hover:not(:disabled) {
+  background: #bd3828;
+}
+
 .start-button::after {
   content: "";
   position: absolute;
@@ -659,13 +668,19 @@ input:focus-visible {
   gap: 9px;
 }
 
+.platform-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .platform-tile {
   position: relative;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  min-height: 41px;
+  min-height: 50px;
   padding: 7px 24px 7px 10px;
   font-size: 12px;
   font-weight: 900;
@@ -673,11 +688,24 @@ input:focus-visible {
   overflow: hidden;
 }
 
-.platform-tile span:last-child {
+.platform-label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.platform-label > span,
+.platform-label > small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.platform-label > small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
 }
 
 .platform-tile.selected {
@@ -696,6 +724,19 @@ input:focus-visible {
   border: 2px solid var(--ink);
   border-radius: 50%;
   background: var(--accent);
+}
+
+.platform-tile.login-ready .platform-label > small {
+  color: var(--green);
+}
+
+.platform-tile.login-needs-login .platform-label > small,
+.platform-tile.login-manual .platform-label > small {
+  color: #8a6812;
+}
+
+.platform-tile.login-failed .platform-label > small {
+  color: var(--red);
 }
 
 .platform-mark {
@@ -954,6 +995,7 @@ select {
   line-height: 1.35;
 }
 
+.result-row.ready,
 .result-row.filled,
 .result-row.published {
   border-color: var(--green);
@@ -964,6 +1006,11 @@ select {
 .result-row.needs-login {
   border-color: var(--yellow);
   background: color-mix(in srgb, var(--yellow) 10%, white);
+}
+
+.result-row.cancelled {
+  border-color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 8%, white);
 }
 
 .result-row.failed {

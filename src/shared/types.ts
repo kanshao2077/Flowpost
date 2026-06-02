@@ -41,7 +41,7 @@ export interface PlatformResult {
 export interface JobState {
   id: string;
   request: DistributionRequest;
-  status: "running" | "complete" | "failed";
+  status: "running" | "complete" | "failed" | "cancelled";
   results: PlatformResult[];
   startedAt: number;
   finishedAt?: number;
