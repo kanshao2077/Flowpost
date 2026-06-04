@@ -5,7 +5,7 @@ export default defineConfig({
   manifest: {
     name: "来一发 FlowPost",
     description: "Fill and optionally publish text plus up to nine images to X, LinkedIn, Jike, and Substack Notes.",
-    version: "0.1.1",
+    version: "0.1.2",
     permissions: ["storage", "tabs", "tabGroups", "windows", "unlimitedStorage"],
     host_permissions: [
       "https://x.com/*",

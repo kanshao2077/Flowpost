@@ -18,19 +18,51 @@ FlowPost 是一个本地浏览器插件。你写一次文案，放好图片，�
 先确认电脑里有这些东西：
 
 1. Chrome 或 Edge 浏览器。
-2. Node.js。建议装 LTS 版本。
-3. Git。用来从 GitHub 下载代码。
-4. 先在浏览器里登录好即刻、X、Substack、LinkedIn。
+2. 先在浏览器里登录好即刻、X、Substack、LinkedIn。
 
-不会装 Node.js 的话，去这里下载 LTS：
+如果你只是安装插件，不需要 Node.js，也不需要 Git。
 
-```text
-https://nodejs.org/
-```
+只有你想改源码、自己构建时，才需要 Node.js 和 Git。
 
 ## 新电脑怎么安装
 
-打开终端，执行：
+推荐用 Release 压缩包，不用命令行。
+
+1. 打开 GitHub Releases 页面：
+
+```text
+https://github.com/kanshao2077/Flowpost/releases
+```
+
+2. 下载最新版本里的 zip 文件，例如：
+
+```text
+flowpost-0.1.2-chrome.zip
+```
+
+3. 解压这个 zip。
+
+4. 打开 Chrome：
+
+```text
+chrome://extensions/
+```
+
+5. 打开右上角「开发者模式」。
+
+6. 点击「加载已解压的扩展程序」。
+
+7. 选择刚刚解压出来的文件夹。
+
+8. 浏览器右上角会出现「来一发 FlowPost」插件。
+
+注意：Chrome 加载的是“解压后的文件夹”，不是 zip 文件本身。
+
+## 用源码安装
+
+如果 Release 没有 zip，或者你想自己构建，再用这个方法。
+
+先安装 Node.js LTS 和 Git，然后打开终端：
 
 ```bash
 git clone https://github.com/kanshao2077/Flowpost.git
@@ -137,17 +169,25 @@ npm install
 npm run build
 ```
 
-### 如果有 GitHub Release 怎么用
+### Release 压缩包和源码有什么区别
 
-以后如果 Release 里提供了这个文件：
+Release 压缩包是已经构建好的插件。
+
+你只需要：
 
 ```text
-flowpost-0.1.0-chrome.zip
+下载 zip -> 解压 -> Chrome 加载解压后的文件夹
 ```
 
-你可以直接下载它，解压后在 Chrome 里「加载已解压的扩展程序」。
+源码是给开发和修改用的。
 
-这种方式不用 `npm install`，也不用 `npm run build`。它适合只想安装插件、不想折腾源码的人。
+源码需要：
+
+```text
+git clone -> npm install -> npm run build -> Chrome 加载 .output/chrome-mv3
+```
+
+如果只是换电脑使用，优先用 Release 压缩包。
 
 ### 发布 Release 时要上传什么
 
@@ -160,10 +200,10 @@ npm run zip
 然后把生成的这个文件上传到 GitHub Release：
 
 ```text
-.output/flowpost-0.1.0-chrome.zip
+.output/flowpost-0.1.2-chrome.zip
 ```
 
-版本号变化后，文件名里的 `0.1.0` 也会跟着变。Release 里除了源码包，还要额外放这个 zip，方便新电脑直接下载使用。
+版本号变化后，文件名里的版本号也会跟着变。Release 里除了源码包，还要额外放这个 zip，方便新电脑直接下载使用。
 
 ### 为什么不把 `node_modules`、`.output` 上传到 GitHub
 
