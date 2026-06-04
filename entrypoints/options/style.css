@@ -674,6 +674,12 @@ input:focus-visible {
   gap: 7px;
 }
 
+.log-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .platform-tile {
   position: relative;
   display: grid;
@@ -951,8 +957,10 @@ select {
 }
 
 .result-row {
+  position: relative;
   display: grid;
-  grid-template-columns: 21px minmax(0, 1fr);
+  grid-template-columns: 21px minmax(0, 1fr) auto;
+  align-items: start;
   gap: 7px;
   padding: 9px;
   border: 1px solid var(--line);
@@ -993,6 +1001,38 @@ select {
   font-size: 11px;
   font-weight: 800;
   line-height: 1.35;
+}
+
+.result-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 25px;
+  padding: 3px 7px;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 900;
+  white-space: nowrap;
+  box-shadow: 0 2px 0 var(--ink);
+  transition:
+    background 120ms var(--ease),
+    box-shadow 120ms var(--ease),
+    transform 120ms var(--ease);
+}
+
+.result-retry:hover:not(:disabled) {
+  background: var(--yellow);
+  box-shadow: 0 3px 0 var(--ink);
+  transform: translateY(-1px);
+}
+
+.result-retry:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .result-row.ready,
@@ -1092,6 +1132,14 @@ select {
   font-size: 11px;
   font-weight: 800;
   line-height: 1.5;
+}
+
+.faq-item a {
+  color: var(--ink);
+  font-weight: 900;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
 }
 
 .maker-signature {

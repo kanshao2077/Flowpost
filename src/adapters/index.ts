@@ -13,6 +13,7 @@ import {
 } from "./dom";
 import { createGenericAdapter, type PlatformAdapter } from "./generic";
 
+// Each platform owns its editor strategy. Do not change generic text writing to fix one platform.
 const xAdapter = createGenericAdapter({
   id: "x",
   label: "X",
@@ -30,15 +31,21 @@ const xAdapter = createGenericAdapter({
   imageButtonSelectors: [
     "[data-testid='fileInput']",
     "[aria-label*='Media']",
-    "[aria-label*='Add photos']"
+    "[aria-label*='Add photos']",
+    "[aria-label*='Add photos or video']",
+    "[aria-label*='添加照片']",
+    "[aria-label*='照片或视频']",
+    "[aria-label*='媒体']"
   ],
-  imageButtonTexts: ["Media", "Add photos", "图片", "媒体"],
+  imageButtonTexts: ["Media", "Add photos", "Add photos or video", "图片", "媒体", "添加照片", "照片或视频"],
   publishSelectors: ["[data-testid='tweetButton']", "[data-testid='tweetButtonInline']"],
   publishTexts: ["Post", "Tweet", "发布"],
   loginSelectors: ["[data-testid='loginButton']", "a[href='/login']", "input[name='text']"],
   loginTexts: ["Log in", "Sign in", "登录"],
   editorTimeoutMs: 20_000,
-  preferLineByLineText: true
+  preferPasteText: true,
+  refreshBeforePublish: true,
+  restoreTextAfterImageUpload: true
 });
 
 const linkedinAdapter = createGenericAdapter({
@@ -114,9 +121,12 @@ const jikeAdapter = createGenericAdapter({
   afterFill: selectJikeCircle,
   afterFillDelayMs: 1_600,
   editorTimeoutMs: 20_000,
+  textStrategy: "direct",
   disableLineByLineText: true,
+  forceDirectText: true,
   directDuplicateRepair: true,
-  verifyTextAfterFill: false
+  verifyTextAfterFill: false,
+  restoreTextAfterImageUpload: true
 });
 
 const substackAdapter = createGenericAdapter({
@@ -169,7 +179,9 @@ const substackAdapter = createGenericAdapter({
   loginTexts: ["Sign in", "Log in", "登录"],
   editorTimeoutMs: 30_000,
   afterOpenDelayMs: 1_800,
-  preferLineByLineText: true
+  textStrategy: "html-paragraphs",
+  preferLineByLineText: true,
+  preferHtmlText: true
 });
 
 const ADAPTERS: Record<PlatformId, PlatformAdapter> = {

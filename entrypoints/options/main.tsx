@@ -7,6 +7,7 @@ import {
   CircleDot,
   Eraser,
   Play,
+  RotateCcw,
   Search,
   Send,
   Square,
@@ -61,12 +62,27 @@ const FAQ_ITEMS = [
     answer: "填充草稿会停在发布前，更稳；尝试自动发布会点击发布按钮，但平台页面变动时可能失败，适合你确认稳定后再用。"
   },
   {
+    question: "怎么检查文案排版？",
+    answer: "先用填充草稿发一段带换行、空行、链接和 emoji 的测试文案。平台发布框里的样子和输入框一致，再手动发布。"
+  },
+  {
     question: "即刻圈子没选上怎么办？",
     answer: "先确认插件里选的圈子名称和即刻弹出的选项一致。若日志提示需要手动处理，通常是即刻页面结构变了或加载太慢。"
   },
   {
     question: "图片支持什么？",
     answer: "支持 PNG、JPG、WebP，最多 9 张。可以粘贴、选择文件，也可以直接拖动缩略图排序。"
+  },
+  {
+    question: "如何联系作者？",
+    answer: (
+      <>
+        可以通过 X 联系作者：
+        <a href="https://x.com/KanShao2077" target="_blank" rel="noreferrer">
+          @KanShao2077
+        </a>
+      </>
+    )
   }
 ];
 
@@ -147,6 +163,7 @@ function App(): React.JSX.Element {
   const canStart = characterCount > 0 && selectedPlatforms.length > 0 && !isRunning;
   const jikeSelected = selectedPlatforms.includes("jike");
   const modeLabel = mode === "draft" ? "草稿" : "自动";
+  const canRetrySinglePlatform = characterCount > 0 && !isRunning;
 
   useEffect(() => {
     if (!circleMenuOpen) return;
@@ -185,6 +202,7 @@ function App(): React.JSX.Element {
     if (!files.length) return;
 
     event.preventDefault();
+    event.stopPropagation();
     await addImagesFromFiles(files, "pasted-image");
   }
 
@@ -228,7 +246,19 @@ function App(): React.JSX.Element {
       return;
     }
 
-    setImages((current) => [...current, ...attachments].slice(0, MAX_IMAGES));
+    setImages((current) => {
+      const seen = new Set(current.map((image) => image.dataUrl));
+      const next = [...current];
+
+      for (const attachment of attachments) {
+        if (next.length >= MAX_IMAGES) break;
+        if (seen.has(attachment.dataUrl)) continue;
+        seen.add(attachment.dataUrl);
+        next.push(attachment);
+      }
+
+      return next;
+    });
     if (warnings.length) setError(warnings.join("；"));
   }
 
@@ -275,13 +305,22 @@ function App(): React.JSX.Element {
   async function startDistribution(): Promise<void> {
     setError(undefined);
 
+    await startDistributionForPlatforms(selectedPlatforms, "至少选择一个平台。");
+  }
+
+  async function retrySinglePlatform(platform: PlatformId): Promise<void> {
+    setError(undefined);
+    await startDistributionForPlatforms([platform], "请选择要重试的平台。");
+  }
+
+  async function startDistributionForPlatforms(platforms: PlatformId[], emptyPlatformMessage: string): Promise<void> {
     if (!text.trim()) {
       setError("文案不能为空。");
       return;
     }
 
-    if (!selectedPlatforms.length) {
-      setError("至少选择一个平台。");
+    if (!platforms.length) {
+      setError(emptyPlatformMessage);
       return;
     }
 
@@ -290,7 +329,7 @@ function App(): React.JSX.Element {
       text: text.trim(),
       image: images[0],
       images,
-      platforms: selectedPlatforms,
+      platforms,
       mode,
       jikeCircle,
       createdAt: Date.now()
@@ -407,7 +446,6 @@ function App(): React.JSX.Element {
             <textarea
               value={text}
               onChange={(event) => setText(event.target.value)}
-              onPaste={handlePaste}
               placeholder="写好再发。"
               spellCheck={false}
             />
@@ -635,12 +673,19 @@ function App(): React.JSX.Element {
         <section className="module log">
           <div className="module-head">
             <span>日志</span>
-            <span className="job-state">{formatJobStatus(job?.status)}</span>
+            <div className="log-actions">
+              <span className="job-state">{formatJobStatus(job?.status)}</span>
+            </div>
           </div>
           {latestResults.length ? (
             <div className="result-list">
               {latestResults.map((result) => (
-                <ResultRow key={result.platform} result={result} />
+                <ResultRow
+                  key={result.platform}
+                  result={result}
+                  canRetry={canRetrySinglePlatform}
+                  onRetry={retrySinglePlatform}
+                />
               ))}
             </div>
           ) : (
@@ -682,7 +727,15 @@ function ModeButton(props: {
   );
 }
 
-function ResultRow({ result }: { result: PlatformResult }): React.JSX.Element {
+function ResultRow({
+  result,
+  canRetry,
+  onRetry
+}: {
+  result: PlatformResult;
+  canRetry: boolean;
+  onRetry: (platform: PlatformId) => void;
+}): React.JSX.Element {
   const definition = getPlatform(result.platform);
   const tone = result.status;
 
@@ -699,6 +752,16 @@ function ResultRow({ result }: { result: PlatformResult }): React.JSX.Element {
         <strong>{definition.label}</strong>
         <p>{result.message}</p>
       </div>
+      <button
+        className="result-retry"
+        type="button"
+        disabled={!canRetry}
+        onClick={() => onRetry(result.platform)}
+        title={`重试 ${definition.label}`}
+      >
+        <RotateCcw size={12} />
+        <span>重试</span>
+      </button>
     </div>
   );
 }

@@ -2,10 +2,15 @@ import type { MediaAttachment } from "../shared/types";
 
 export const DEFAULT_TIMEOUT_MS = 18_000;
 
+export type EditableTextStrategy = "auto" | "direct" | "line-by-line" | "paste" | "html-paragraphs";
+
 export interface EditableTextOptions {
+  strategy?: EditableTextStrategy;
   preferLineByLine?: boolean;
   disableLineByLine?: boolean;
   forceDirect?: boolean;
+  preferPaste?: boolean;
+  preferHtml?: boolean;
 }
 
 export function sleep(ms: number): Promise<void> {
@@ -207,12 +212,14 @@ export async function clickFirstAvailable(config: {
 }
 
 export function setEditableText(element: Element, text: string, options: EditableTextOptions = {}): void {
+  const normalizedText = normalizeLineEndings(text);
+
   if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
     element.scrollIntoView({ block: "center", inline: "nearest" });
     element.focus();
     const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value");
-    descriptor?.set?.call(element, text);
-    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+    descriptor?.set?.call(element, normalizedText);
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: normalizedText }));
     dispatchTextCommitEvents(element);
     return;
   }
@@ -224,29 +231,90 @@ export function setEditableText(element: Element, text: string, options: Editabl
   element.scrollIntoView({ block: "center", inline: "nearest" });
   element.focus();
 
-  if (options.forceDirect) {
-    setContentEditableTextDirectly(element, text);
-    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: text }));
+  const strategy = options.strategy ?? "auto";
+
+  if (strategy === "direct" || options.forceDirect) {
+    setContentEditableTextDirectly(element, normalizedText);
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: normalizedText }));
     dispatchTextCommitEvents(element);
     return;
   }
 
-  if (
-    !options.disableLineByLine &&
-    (options.preferLineByLine || text.includes("\n")) &&
-    text.includes("\n") &&
-    setContentEditableTextLineByLine(element, text)
-  ) {
+  if (strategy === "html-paragraphs") {
+    if (setContentEditableTextWithHtmlParagraphs(element, normalizedText)) {
+      dispatchInputEvent(element, "insertHTML", normalizedText);
+      dispatchTextCommitEvents(element);
+      return;
+    }
+    setContentEditableTextDirectly(element, normalizedText);
+    dispatchInputEvent(element, "insertReplacementText", normalizedText);
+    dispatchTextCommitEvents(element);
+    return;
+  }
+
+  if (strategy === "line-by-line") {
+    if (setContentEditableTextLineByLine(element, normalizedText)) {
+      dispatchInputEvent(element, "insertText", normalizedText);
+      dispatchTextCommitEvents(element);
+      return;
+    }
+    setContentEditableTextDirectly(element, normalizedText);
+    dispatchInputEvent(element, "insertReplacementText", normalizedText);
+    dispatchTextCommitEvents(element);
+    return;
+  }
+
+  if (strategy === "paste") {
+    if (setContentEditableTextByPaste(element, normalizedText) && isEditableTextMatch(element, normalizedText)) {
+      dispatchTextCommitEvents(element);
+      return;
+    }
+    setContentEditableTextDirectly(element, normalizedText);
+    dispatchInputEvent(element, "insertReplacementText", normalizedText);
+    dispatchTextCommitEvents(element);
+    return;
+  }
+
+  if (normalizedText.includes("\n")) {
+    if (options.preferHtml && setContentEditableTextWithHtmlParagraphs(element, normalizedText) && isEditableTextMatch(element, normalizedText)) {
+      dispatchInputEvent(element, "insertHTML", normalizedText);
+      dispatchTextCommitEvents(element);
+      return;
+    }
+
+    if (setContentEditableTextWithPlainInsert(element, normalizedText) && isEditableTextMatch(element, normalizedText)) {
+      dispatchInputEvent(element, "insertText", normalizedText);
+      dispatchTextCommitEvents(element);
+      return;
+    }
+
+    if (
+      !options.disableLineByLine &&
+      setContentEditableTextLineByLine(element, normalizedText) &&
+      isEditableTextMatch(element, normalizedText)
+    ) {
+      dispatchInputEvent(element, "insertText", normalizedText);
+      dispatchTextCommitEvents(element);
+      return;
+    }
+
+    if (options.preferPaste && setContentEditableTextByPaste(element, normalizedText) && isEditableTextMatch(element, normalizedText)) {
+      dispatchTextCommitEvents(element);
+      return;
+    }
+
+    setContentEditableTextDirectly(element, normalizedText);
+    dispatchInputEvent(element, "insertReplacementText", normalizedText);
     dispatchTextCommitEvents(element);
     return;
   }
 
   selectEditableContents(element);
-  const inserted = document.execCommand("insertText", false, text);
+  const inserted = document.execCommand("insertText", false, normalizedText);
   if (!inserted) {
-    if (options.disableLineByLine || !setContentEditableTextLineByLine(element, text)) {
-      setContentEditableTextDirectly(element, text);
-      element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: text }));
+    if (options.disableLineByLine || !setContentEditableTextLineByLine(element, normalizedText)) {
+      setContentEditableTextDirectly(element, normalizedText);
+      dispatchInputEvent(element, "insertReplacementText", normalizedText);
     }
   }
 
@@ -283,17 +351,95 @@ export function repairEditableTextIfDuplicated(
 
 export function getEditablePlainText(element: Element): string {
   if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return element.value;
+  if (element instanceof HTMLElement) return element.innerText || element.textContent || "";
   return element.textContent ?? "";
+}
+
+export function refreshEditableTextState(element: Element): void {
+  if (!(element instanceof HTMLElement)) return;
+
+  element.scrollIntoView({ block: "center", inline: "nearest" });
+  element.focus();
+  element.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+  element.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: "" }));
+  element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "" }));
+  document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+  dispatchTextCommitEvents(element);
 }
 
 function setContentEditableTextDirectly(element: HTMLElement, text: string): void {
   element.textContent = "";
   element.innerHTML = "";
-  element.append(document.createTextNode(text));
+  const lines = normalizeLineEndings(text).split("\n");
+
+  lines.forEach((line, index) => {
+    if (index > 0) element.append(document.createElement("br"));
+    if (line) element.append(document.createTextNode(line));
+  });
+}
+
+function setContentEditableTextWithPlainInsert(element: HTMLElement, text: string): boolean {
+  selectEditableContents(element);
+  const deleted = document.execCommand("delete", false);
+  if (!deleted) {
+    setContentEditableTextDirectly(element, "");
+    selectEditableContents(element);
+  }
+
+  return document.execCommand("insertText", false, normalizeLineEndings(text));
+}
+
+function setContentEditableTextWithHtmlParagraphs(element: HTMLElement, text: string): boolean {
+  const html = normalizeLineEndings(text)
+    .split("\n")
+    .map((line) => `<p>${line ? escapeHtml(line) : "<br>"}</p>`)
+    .join("");
+
+  selectEditableContents(element);
+  const deleted = document.execCommand("delete", false);
+  if (!deleted) {
+    setContentEditableTextDirectly(element, "");
+    selectEditableContents(element);
+  }
+
+  return document.execCommand("insertHTML", false, html);
+}
+
+function setContentEditableTextByPaste(element: HTMLElement, text: string): boolean {
+  const normalizedText = normalizeLineEndings(text);
+
+  selectEditableContents(element);
+  const deleted = document.execCommand("delete", false);
+  if (!deleted) {
+    setContentEditableTextDirectly(element, "");
+    selectEditableContents(element);
+  }
+
+  const beforeInput = new InputEvent("beforeinput", {
+    bubbles: true,
+    cancelable: true,
+    inputType: "insertFromPaste",
+    data: normalizedText
+  });
+
+  if (!element.dispatchEvent(beforeInput)) return false;
+
+  const inserted = document.execCommand("insertText", false, normalizedText);
+  if (!inserted) return false;
+
+  element.dispatchEvent(
+    new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertFromPaste",
+      data: normalizedText
+    })
+  );
+  document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+  return true;
 }
 
 function setContentEditableTextLineByLine(element: HTMLElement, text: string): boolean {
-  const normalizedText = text.replace(/\r\n?/g, "\n");
+  const normalizedText = normalizeLineEndings(text);
   const lines = normalizedText.split("\n");
   let commandFailed = false;
 
@@ -306,7 +452,9 @@ function setContentEditableTextLineByLine(element: HTMLElement, text: string): b
   for (let index = 0; index < lines.length; index += 1) {
     if (index > 0) {
       const lineBreakInserted =
-        document.execCommand("insertLineBreak", false) || document.execCommand("insertParagraph", false);
+        document.execCommand("insertText", false, "\n") ||
+        document.execCommand("insertLineBreak", false) ||
+        document.execCommand("insertParagraph", false);
       if (!lineBreakInserted) commandFailed = true;
     }
 
@@ -334,12 +482,34 @@ function dispatchTextCommitEvents(element: Element): void {
   element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
 }
 
+function dispatchInputEvent(element: Element, inputType: string, data: string): void {
+  element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType, data }));
+}
+
 function isEditableTextMatch(element: Element, expectedText: string): boolean {
   return normalizeEditableSnapshot(getEditablePlainText(element)) === normalizeEditableSnapshot(expectedText);
 }
 
 function normalizeEditableSnapshot(text: string): string {
-  return text.replace(/\u200b/g, "").replace(/\s+/g, "").trim();
+  return normalizeLineEndings(text)
+    .replace(/\u200b/g, "")
+    .split("\n")
+    .map((line) => line.replace(/[ \t\f\v]+/g, " ").trim())
+    .join("\n")
+    .trim();
+}
+
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 export function dataUrlToFile(image: MediaAttachment): File {
@@ -444,7 +614,13 @@ function assignImagesToInput(input: HTMLInputElement, images: MediaAttachment[])
     dataTransfer.items.add(dataUrlToFile(image));
   }
 
-  input.files = dataTransfer.files;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.dispatchEvent(new Event("change", { bubbles: true }));
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+  if (descriptor?.set) {
+    descriptor.set.call(input, dataTransfer.files);
+  } else {
+    input.files = dataTransfer.files;
+  }
+
+  input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 }

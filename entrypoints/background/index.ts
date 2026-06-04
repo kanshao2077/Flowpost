@@ -151,7 +151,7 @@ async function runDistribution(request: DistributionRequest): Promise<JobState> 
       await saveJobState(job);
     } catch (error) {
       if (await isJobCancelled(request.id)) return (await getJobState()) ?? job;
-      job = upsertResult(job, makeResult(platform, "failed", `${definition.label} 失败：${describeError(error)}`));
+      job = upsertResult(job, makeResult(platform, "failed", makePlatformFailureMessage(definition.label, error)));
       await saveJobState(job);
     }
   }
@@ -377,6 +377,37 @@ function makeResult(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
+
+function makePlatformFailureMessage(label: string, error: unknown): string {
+  const detail = describeError(error);
+  const normalized = detail.toLowerCase();
+
+  if (detail.includes("标签页已关闭")) {
+    return `${label} 没有完成：对应标签页已关闭，可稍后重试。`;
+  }
+
+  if (detail.includes("分发已停止")) {
+    return `${label} 已停止。`;
+  }
+
+  if (detail.includes("页面加载超时")) {
+    return `${label} 页面加载太慢，已停止处理，可稍后重试。`;
+  }
+
+  if (detail.includes("页面脚本没有返回结果") || detail.includes("页面脚本未就绪")) {
+    return `${label} 页面脚本未就绪：通常是平台页面还在加载、跳转，或当前标签页不是发布页，可重试。`;
+  }
+
+  if (normalized.includes("receiving end does not exist") || normalized.includes("could not establish connection")) {
+    return `${label} 页面脚本未连接，通常是页面还没准备好或平台跳转了，可重试。`;
+  }
+
+  if (detail.includes("找不到页面元素")) {
+    return `${label} 页面结构变化，没找到发布框，请手动处理或反馈这个平台。`;
+  }
+
+  return `${label} 失败：${detail}`;
 }
 
 function describeError(error: unknown): string {

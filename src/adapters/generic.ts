@@ -7,14 +7,17 @@ import {
   ensureEditableTextMatches,
   findVisibleElementByText,
   isDisabled,
+  isVisible,
+  normalizeText,
   queryFirstVisible,
   repairEditableTextIfDuplicated,
+  refreshEditableTextState,
   setEditableText,
   sleep,
   uploadImagesFromDataUrls,
-  waitForAnyVisible,
-  waitForVisibleElementByText
+  waitForAnyVisible
 } from "./dom";
+import type { EditableTextStrategy } from "./dom";
 
 export interface PlatformAdapter {
   id: PlatformId;
@@ -44,9 +47,21 @@ export interface PlatformAdapterConfig {
   disableLineByLineText?: boolean;
   directDuplicateRepair?: boolean;
   verifyTextAfterFill?: boolean;
+  textStrategy?: EditableTextStrategy;
+  preferPasteText?: boolean;
+  preferHtmlText?: boolean;
+  forceDirectText?: boolean;
+  refreshBeforePublish?: boolean;
+  restoreTextAfterImageUpload?: boolean;
 }
 
 const BUTTON_LIKE_SELECTORS = ["button", "[role='button']", "a", "div[role='button']"];
+const PUBLISH_BUTTON_TIMEOUT_MS = 6_000;
+const PUBLISH_BUTTON_POLL_MS = 300;
+
+type PublishButtonSearchResult =
+  | { status: "ready"; button: HTMLElement }
+  | { status: "disabled" | "missing" };
 
 export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAdapter {
   return {
@@ -89,10 +104,14 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
         const beforeFillWarning = await runOptionalStep(config.beforeFill, payload);
         if (beforeFillWarning) warnings.push(beforeFillWarning);
 
-        const editor = await waitForAnyVisible(config.editorSelectors, config.editorTimeoutMs ?? 18_000);
+        let editor = await waitForAnyVisible(config.editorSelectors, config.editorTimeoutMs ?? 18_000);
         const textOptions = {
+          strategy: config.textStrategy,
           preferLineByLine: config.preferLineByLineText,
-          disableLineByLine: config.disableLineByLineText
+          disableLineByLine: config.disableLineByLineText,
+          preferPaste: config.preferPasteText,
+          preferHtml: config.preferHtmlText,
+          forceDirect: config.forceDirectText
         };
         setEditableText(editor, payload.text, textOptions);
         await sleep(config.afterFillDelayMs ?? 700);
@@ -109,9 +128,7 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
 
         if (config.verifyTextAfterFill !== false) {
           const fullTextFilled = await ensureEditableTextMatches(editor, payload.text, textOptions);
-          if (!fullTextFilled) {
-            return result(config.id, "manual", `${config.label} 文本没有完整填入，已停在草稿页，请手动检查后再发布。`);
-          }
+          if (!fullTextFilled) return result(config.id, "manual", makeTextMismatchMessage(config.label));
         }
 
         const afterFillWarning = await runOptionalStep(config.afterFill, payload);
@@ -127,12 +144,16 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
               openerTexts: config.imageButtonTexts,
               openerTextSelectors: BUTTON_LIKE_SELECTORS
             });
+            if (config.restoreTextAfterImageUpload) {
+              await sleep(500);
+              editor = queryFirstVisible(config.editorSelectors) ?? editor;
+              const textStillPresent = await ensureEditableTextMatches(editor, payload.text, textOptions);
+              if (!textStillPresent) {
+                return result(config.id, "manual", makeTextLostAfterImageMessage(config.label));
+              }
+            }
           } catch (error) {
-            return result(
-              config.id,
-              "manual",
-              `${config.label} 文本已填入，但图片上传需要手动处理：${describeError(error)}`
-            );
+            return result(config.id, "manual", makeImageUploadMessage(config.label, error, images.length));
           }
         }
 
@@ -145,12 +166,17 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
           return result(config.id, "filled", `${config.label} 已填入草稿，停在发布前${suffix}。`);
         }
 
-        const publishButton = await findPublishButton(config);
-        if (!publishButton) {
-          return result(config.id, "manual", `${config.label} 已填入草稿，但找不到可点击的发布按钮。`);
+        if (config.refreshBeforePublish) {
+          refreshEditableTextState(editor);
+          await sleep(350);
         }
 
-        clickElement(publishButton);
+        const publishButton = await waitForPublishButton(config);
+        if (publishButton.status !== "ready") {
+          return result(config.id, "manual", makePublishButtonMessage(config.label, publishButton.status));
+        }
+
+        clickElement(publishButton.button);
         await sleep(1_000);
         return result(config.id, "published", `${config.label} 已点击发布按钮。`);
       } catch (error) {
@@ -158,10 +184,54 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
           return result(config.id, "needs-login", makeLoginMessage(config.label));
         }
 
-        return result(config.id, "failed", `${config.label} 处理失败：${describeError(error)}`);
+        return result(config.id, "failed", makeUnhandledFillMessage(config.label, error));
       }
     }
   };
+}
+
+function makeTextMismatchMessage(label: string): string {
+  return `${label} 正文填充不完整：发布框里的内容和 FlowPost 输入框不一致，已停在草稿页，请手动检查正文。`;
+}
+
+function makeTextLostAfterImageMessage(label: string): string {
+  return `${label} 图片上传后正文丢失或不完整：已尝试补回但没有成功，请先检查正文再发布。`;
+}
+
+function makeImageUploadMessage(label: string, error: unknown, imageCount: number): string {
+  const detail = describeError(error);
+
+  if (detail.includes("找不到图片上传入口")) {
+    return `${label} 正文已填入，但没有找到图片上传入口：可能是图片按钮没加载或平台页面结构变化，请手动上传 ${imageCount} 张图片。`;
+  }
+
+  if (detail.includes("图片数据无效")) {
+    return `${label} 正文已填入，但图片数据无效：请重新选择或粘贴图片后再试。`;
+  }
+
+  return `${label} 正文已填入，但图片上传失败：${detail}。请检查图片后手动处理。`;
+}
+
+function makePublishButtonMessage(label: string, status: Exclude<PublishButtonSearchResult["status"], "ready">): string {
+  if (status === "disabled") {
+    return `${label} 已填入草稿，但发布按钮尚未就绪：通常是图片/链接预览还在处理，或平台没有识别到正文，请手动确认后点击发布。`;
+  }
+
+  return `${label} 已填入草稿，但没有识别到发布按钮：可能是平台页面改版，请手动点击发布。`;
+}
+
+function makeUnhandledFillMessage(label: string, error: unknown): string {
+  const detail = describeError(error);
+
+  if (detail.includes("找不到页面元素")) {
+    return `${label} 找不到发布框：可能是未登录、页面加载太慢，或平台页面结构变化。`;
+  }
+
+  if (detail.includes("找不到按钮")) {
+    return `${label} 找不到需要点击的按钮：可能是页面语言、布局或平台结构变化。`;
+  }
+
+  return `${label} 处理失败：${detail}`;
 }
 
 async function runOptionalStep(
@@ -192,22 +262,67 @@ async function openComposerIfNeeded(config: PlatformAdapterConfig): Promise<void
   }
 }
 
-async function findPublishButton(config: PlatformAdapterConfig): Promise<HTMLElement | undefined> {
-  const direct = queryFirstVisible<HTMLElement>(config.publishSelectors);
-  if (direct && !isDisabled(direct)) return direct;
+async function waitForPublishButton(config: PlatformAdapterConfig): Promise<PublishButtonSearchResult> {
+  const deadline = Date.now() + PUBLISH_BUTTON_TIMEOUT_MS;
+  let sawDisabledButton = false;
 
-  try {
-    const byText = await waitForVisibleElementByText<HTMLElement>(
-      BUTTON_LIKE_SELECTORS,
-      config.publishTexts,
-      4_000
-    );
-    if (!isDisabled(byText)) return byText;
-  } catch {
-    return undefined;
+  while (Date.now() <= deadline) {
+    const direct = findClickableElementBySelectors(config.publishSelectors);
+    if (direct.button) return { status: "ready", button: direct.button };
+    if (direct.sawDisabled) sawDisabledButton = true;
+
+    const byText = findClickableElementByText(BUTTON_LIKE_SELECTORS, config.publishTexts);
+    if (byText.button) return { status: "ready", button: byText.button };
+    if (byText.sawDisabled) sawDisabledButton = true;
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await sleep(Math.min(PUBLISH_BUTTON_POLL_MS, remainingMs));
   }
 
-  return undefined;
+  return { status: sawDisabledButton ? "disabled" : "missing" };
+}
+
+function findClickableElementBySelectors(selectors: string[]): { button?: HTMLElement; sawDisabled: boolean } {
+  let sawDisabled = false;
+
+  for (const selector of selectors) {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(selector)).filter(isVisible);
+    const enabled = elements.find((element) => !isDisabled(element));
+    if (enabled) return { button: enabled, sawDisabled };
+    if (elements.length) sawDisabled = true;
+  }
+
+  return { sawDisabled };
+}
+
+function findClickableElementByText(
+  selectors: string[],
+  texts: string[]
+): { button?: HTMLElement; sawDisabled: boolean } {
+  const wanted = texts.map(normalizeText);
+  let sawDisabled = false;
+
+  for (const selector of selectors) {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(selector)).filter((element) => {
+      if (!isVisible(element)) return false;
+      const label = normalizeText(
+        [
+          element.textContent ?? "",
+          element.getAttribute("aria-label") ?? "",
+          element.getAttribute("title") ?? "",
+          element.getAttribute("data-control-name") ?? ""
+        ].join(" ")
+      );
+      return wanted.some((text) => label.includes(text));
+    });
+
+    const enabled = elements.find((element) => !isDisabled(element));
+    if (enabled) return { button: enabled, sawDisabled };
+    if (elements.length) sawDisabled = true;
+  }
+
+  return { sawDisabled };
 }
 
 function looksLoggedOut(config: PlatformAdapterConfig): boolean {
