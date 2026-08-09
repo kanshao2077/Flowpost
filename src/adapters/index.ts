@@ -1,5 +1,5 @@
 import type { PlatformId } from "../shared/platforms";
-import type { PlatformFillPayload } from "../shared/types";
+import type { PlatformFillPayload, PlatformResult } from "../shared/types";
 import {
   clickElement,
   clickPoint,
@@ -9,7 +9,8 @@ import {
   queryFirstVisible,
   repairEditableTextIfDuplicated,
   setEditableText,
-  sleep
+  sleep,
+  waitForAnyVisible
 } from "./dom";
 import { createGenericAdapter, type PlatformAdapter } from "./generic";
 
@@ -184,15 +185,357 @@ const substackAdapter = createGenericAdapter({
   preferHtmlText: true
 });
 
+const XIAOHONGSHU_TITLE_SELECTORS = [
+  "input[placeholder='填写标题会有更多赞哦']",
+  "input.c-input_inner[placeholder*='填写标题']",
+  "input[placeholder*='填写标题']"
+];
+
+const xiaohongshuCoreAdapter = createGenericAdapter({
+  id: "xiaohongshu",
+  label: "小红书",
+  editorSelectors: [
+    ".editor-content .ProseMirror[contenteditable='true']",
+    ".ProseMirror[contenteditable='true']",
+    "div[contenteditable='true'][data-placeholder*='输入正文描述']",
+    "div[role='textbox'][contenteditable='true']"
+  ],
+  imageInputSelectors: [
+    "input.upload-input[type='file'][accept*='.jpg']",
+    "input[type='file'][accept*='.webp'][multiple]",
+    "input[type='file'][accept*='.png']"
+  ],
+  imageButtonSelectors: ["button.upload-button", ".upload-wrapper button", ".upload-content button"],
+  imageButtonTexts: ["上传图片"],
+  // The image-note editor only appears after at least one image finishes uploading.
+  uploadImagesBeforeEditor: true,
+  afterImageUploadDelayMs: 2_400,
+  loginReadySelectors: ["button.upload-button", "input.upload-input[type='file']", ".upload-wrapper"],
+  loginSelectors: [
+    "input[placeholder*='手机号']",
+    "input[placeholder*='验证码']",
+    "[class*='login'] [class*='qrcode']"
+  ],
+  loginTexts: ["扫码登录", "手机号登录", "验证码登录"],
+  publishSelectors: [],
+  publishTexts: [],
+  getText: (payload) => makeXiaohongshuBodyText(payload.text),
+  afterFill: (payload) => prepareTitledPost(payload, XIAOHONGSHU_TITLE_SELECTORS, 20, "小红书"),
+  editorTimeoutMs: 35_000,
+  afterFillDelayMs: 900,
+  textStrategy: "html-paragraphs",
+  preferLineByLineText: true,
+  preferHtmlText: true
+});
+
+const xiaohongshuAdapter = withPostTitle({
+  adapter: xiaohongshuCoreAdapter,
+  id: "xiaohongshu",
+  label: "小红书",
+  titleSelectors: XIAOHONGSHU_TITLE_SELECTORS,
+  titleMaxLength: 20,
+  requireImage: true,
+  filledMessage: "小红书图片、标题和正文已填入，停在发布前。"
+});
+
+const DOUYIN_TITLE_SELECTORS = [
+  "input[placeholder='添加作品标题']",
+  "input[placeholder*='作品标题']",
+  ".semi-input[placeholder*='标题']"
+];
+
+const douyinCoreAdapter = createGenericAdapter({
+  id: "douyin",
+  label: "抖音",
+  editorSelectors: [
+    "[contenteditable='true'][data-placeholder*='作品描述']",
+    "[contenteditable='true'][aria-label*='作品描述']",
+    ".ProseMirror[contenteditable='true']",
+    "div[role='textbox'][contenteditable='true']",
+    "div[contenteditable='true']"
+  ],
+  imageInputSelectors: [
+    "[class*='upload'] input[type='file'][accept*='image']",
+    "input[type='file'][accept*='image']",
+    "input[type='file'][accept*='.jpg']"
+  ],
+  imageButtonSelectors: [
+    "div[class*='container-']:has(> div > img):has(> div[class*='bold-text-container-'])",
+    "button[class*='upload']",
+    "[class*='upload-btn']",
+    "[class*='upload'] [role='button']"
+  ],
+  imageButtonTexts: ["上传图片", "选择图片", "点击上传", "本地上传"],
+  // The current image-text publisher has several similarly labelled confirmation controls.
+  // Keep auto mode manual until a stable, uniquely identifiable final publish control exists.
+  publishSelectors: [],
+  publishTexts: [],
+  loginSelectors: [
+    "input[placeholder*='手机号']",
+    "input[name='mobile']",
+    "iframe[src*='login']",
+    "[class*='login-container'] [class*='qrcode']"
+  ],
+  loginTexts: ["扫码登录", "手机号登录", "登录"],
+  beforeFill: (payload) => prepareTitledPost(payload, DOUYIN_TITLE_SELECTORS, 20, "抖音"),
+  editorTimeoutMs: 30_000,
+  afterOpenDelayMs: 1_500,
+  preferPasteText: true,
+  restoreTextAfterImageUpload: true
+});
+
+const douyinAdapter = withPostTitle({
+  adapter: douyinCoreAdapter,
+  id: "douyin",
+  label: "抖音",
+  titleSelectors: DOUYIN_TITLE_SELECTORS,
+  titleMaxLength: 20,
+  requireImage: true
+});
+
+const WECHAT_CHANNELS_TITLE_SELECTORS = [
+  ".form-item input[placeholder^='填写标题']",
+  "input[placeholder^='填写标题']",
+  "input[placeholder*='图文标题']"
+];
+
+const wechatChannelsCoreAdapter = createGenericAdapter({
+  id: "wechatChannels",
+  label: "视频号",
+  editorSelectors: [
+    ".post-desc-box .input-editor[contenteditable]",
+    ".form-item .input-editor[contenteditable]",
+    "[contenteditable='true'][data-placeholder^='添加描述']",
+    "div[role='textbox'][contenteditable='true']"
+  ],
+  imageInputSelectors: [
+    ".post-upload-wrap .upload-wrap input[type='file']",
+    ".post-upload-wrap input[type='file'][accept*='image']",
+    ".material-edit-wrap input[type='file'][accept*='image']",
+    "input[type='file'][accept*='image']"
+  ],
+  imageButtonSelectors: [
+    ".post-upload-wrap .upload-wrap",
+    ".post-upload-wrap [role='button']",
+    ".material-edit-wrap [class*='upload']"
+  ],
+  imageButtonTexts: ["上传图片", "选择图片", "点击上传", "上传"],
+  // Video Channels requires a final human review of title, media processing and account settings.
+  publishSelectors: [],
+  publishTexts: [],
+  loginSelectors: [
+    ".qrcode-area",
+    ".qrcode-wrap",
+    "img.qrcode",
+    "[class*='scan-login']",
+    "[class*='login'] [class*='qrcode']"
+  ],
+  loginTexts: ["登录视频号助手", "使用手机微信扫码登录", "重新扫码"],
+  beforeFill: (payload) => prepareTitledPost(payload, WECHAT_CHANNELS_TITLE_SELECTORS, 22, "视频号"),
+  editorTimeoutMs: 30_000,
+  afterOpenDelayMs: 1_500,
+  textStrategy: "direct",
+  disableLineByLineText: true,
+  forceDirectText: true,
+  restoreTextAfterImageUpload: true
+});
+
+const wechatChannelsAdapter = withPostTitle({
+  adapter: wechatChannelsCoreAdapter,
+  id: "wechatChannels",
+  label: "视频号",
+  titleSelectors: WECHAT_CHANNELS_TITLE_SELECTORS,
+  titleMaxLength: 22,
+  requireImage: true
+});
+
+const WATCHA_TITLE_SELECTORS = [
+  "[role='dialog'].p-dialog input[placeholder='标题 *']",
+  "input[placeholder='标题 *']"
+];
+
+const watchaCoreAdapter = createGenericAdapter({
+  id: "watcha",
+  label: "观猹",
+  editorSelectors: [
+    "[role='dialog'].p-dialog .editor-content .tiptap.ProseMirror[contenteditable='true'][role='textbox']",
+    "[role='dialog'].p-dialog .editor-content [contenteditable='true'][role='textbox']",
+    "[role='dialog'].p-dialog [contenteditable='true'][data-placeholder*='分享你的观猹']"
+  ],
+  openComposerTexts: ["发个帖子"],
+  imageInputSelectors: [
+    "[role='dialog'].p-dialog input[type='file'][accept*='.jpg']",
+    "[role='dialog'].p-dialog input[type='file'][accept*='.png']"
+  ],
+  imageButtonSelectors: [],
+  imageButtonTexts: [],
+  // Watcha needs a final human review; auto mode is deliberately stopped before this button.
+  publishSelectors: [],
+  publishTexts: [],
+  loginSelectors: ["a[href*='/login']", "a[href*='/sign-in']"],
+  loginTexts: ["登录", "注册"],
+  beforeFill: (payload) => prepareTitledPost(payload, WATCHA_TITLE_SELECTORS, 50, "观猹"),
+  editorTimeoutMs: 20_000,
+  afterOpenDelayMs: 900,
+  textStrategy: "html-paragraphs",
+  preferLineByLineText: true,
+  preferHtmlText: true,
+  restoreTextAfterImageUpload: true
+});
+
+const watchaAdapter = withPostTitle({
+  adapter: watchaCoreAdapter,
+  id: "watcha",
+  label: "观猹",
+  titleSelectors: WATCHA_TITLE_SELECTORS,
+  titleMaxLength: 50
+});
+
 const ADAPTERS: Record<PlatformId, PlatformAdapter> = {
   x: xAdapter,
   linkedin: linkedinAdapter,
   jike: jikeAdapter,
-  substack: substackAdapter
+  substack: substackAdapter,
+  xiaohongshu: xiaohongshuAdapter,
+  douyin: douyinAdapter,
+  wechatChannels: wechatChannelsAdapter,
+  watcha: watchaAdapter
 };
 
 export function getAdapter(platform: PlatformId): PlatformAdapter {
   return ADAPTERS[platform];
+}
+
+function withPostTitle(config: {
+  adapter: PlatformAdapter;
+  id: PlatformId;
+  label: string;
+  titleSelectors: string[];
+  titleMaxLength: number;
+  requireImage?: boolean;
+  filledMessage?: string;
+}): PlatformAdapter {
+  return {
+    id: config.id,
+    checkLogin: () => config.adapter.checkLogin(),
+    async fill(payload) {
+      if (config.requireImage && !getPayloadImages(payload).length) {
+        return localResult(config.id, "manual", `${config.label} 图文发布至少需要 1 张图片，请添加图片后重试。`);
+      }
+
+      const result = await config.adapter.fill(payload);
+      if (result.status === "needs-login" || result.status === "failed") return result;
+
+      const titleReady = await ensurePostTitle(
+        config.titleSelectors,
+        payload.text,
+        config.titleMaxLength,
+        2_500
+      );
+      if (!titleReady) {
+        if (result.status === "manual") return result;
+        return localResult(
+          config.id,
+          "manual",
+          `${config.label} 内容已尝试填入，但未能确认标题，请检查标题后手动发布。`
+        );
+      }
+
+      return config.filledMessage && result.status === "filled"
+        ? localResult(config.id, "filled", config.filledMessage)
+        : result;
+    }
+  };
+}
+
+async function prepareTitledPost(
+  payload: PlatformFillPayload,
+  titleSelectors: string[],
+  titleMaxLength: number,
+  label: string
+): Promise<string | undefined> {
+  await ensurePostTitle(titleSelectors, payload.text, titleMaxLength, 10_000);
+  if (payload.mode !== "auto") return undefined;
+
+  const imageReview = getPayloadImages(payload).length ? "和图片" : "";
+  return `${label} 自动发布暂未启用，请检查标题、正文${imageReview}后手动发布`;
+}
+
+async function ensurePostTitle(
+  selectors: string[],
+  text: string,
+  maxLength: number,
+  timeoutMs: number
+): Promise<boolean> {
+  const title = makePostTitle(text, maxLength);
+  if (!title) return false;
+
+  let input: HTMLElement;
+  try {
+    input = await waitForAnyVisible<HTMLElement>(selectors, timeoutMs);
+  } catch {
+    return false;
+  }
+
+  const currentValue = input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement ? input.value : input.textContent ?? "";
+  if (currentValue.trim() !== title) {
+    setEditableText(input, title);
+    input.blur();
+    await sleep(250);
+  }
+
+  const refreshedInput = queryFirstVisible<HTMLElement>(selectors) ?? input;
+  const refreshedValue =
+    refreshedInput instanceof HTMLInputElement || refreshedInput instanceof HTMLTextAreaElement
+      ? refreshedInput.value
+      : refreshedInput.textContent ?? "";
+  return refreshedValue.trim() === title;
+}
+
+function makePostTitle(text: string, maxLength: number): string {
+  const candidate = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!candidate) return "";
+
+  let title = "";
+  for (const character of candidate) {
+    if (`${title}${character}`.length > maxLength) break;
+    title += character;
+  }
+  return title;
+}
+
+function makeXiaohongshuBodyText(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const titleLineIndex = lines.findIndex((line) => Boolean(line.trim()));
+  if (titleLineIndex < 0) return "";
+
+  const body = lines
+    .slice(titleLineIndex + 1)
+    .join("\n")
+    .trim();
+
+  return body || text.trim();
+}
+
+function getPayloadImages(payload: PlatformFillPayload) {
+  return payload.images?.length ? payload.images : payload.image ? [payload.image] : [];
+}
+
+function localResult(
+  platform: PlatformId,
+  status: PlatformResult["status"],
+  message: string
+): PlatformResult {
+  return {
+    platform,
+    status,
+    message,
+    at: Date.now(),
+    url: window.location.href
+  };
 }
 
 async function selectJikeCircle(payload: PlatformFillPayload): Promise<string | undefined> {

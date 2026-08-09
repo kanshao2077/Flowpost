@@ -7,7 +7,8 @@ export const MESSAGE_TYPES = {
   GET_JOB_STATE: "GET_JOB_STATE",
   CHECK_LOGINS: "CHECK_LOGINS",
   CHECK_PLATFORM_LOGIN: "CHECK_PLATFORM_LOGIN",
-  FILL_PLATFORM: "FILL_PLATFORM"
+  FILL_PLATFORM: "FILL_PLATFORM",
+  CONFIRM_PLATFORM_PUBLISHED: "CONFIRM_PLATFORM_PUBLISHED"
 } as const;
 
 export type StartDistributionMessage = {
@@ -42,13 +43,22 @@ export type FillPlatformMessage = {
   payload: PlatformFillPayload;
 };
 
+export type ConfirmPlatformPublishedMessage = {
+  type: typeof MESSAGE_TYPES.CONFIRM_PLATFORM_PUBLISHED;
+  payload: {
+    jobId: string;
+    platform: PlatformId;
+  };
+};
+
 export type RuntimeMessage =
   | StartDistributionMessage
   | StopDistributionMessage
   | GetJobStateMessage
   | CheckLoginsMessage
   | CheckPlatformLoginMessage
-  | FillPlatformMessage;
+  | FillPlatformMessage
+  | ConfirmPlatformPublishedMessage;
 
 export type StartDistributionResponse = {
   ok: boolean;
@@ -83,6 +93,12 @@ export type CheckPlatformLoginResponse = {
 export type FillPlatformResponse = {
   ok: boolean;
   result?: PlatformResult;
+  error?: string;
+};
+
+export type ConfirmPlatformPublishedResponse = {
+  ok: boolean;
+  job?: JobState;
   error?: string;
 };
 
