@@ -26,6 +26,7 @@ export interface DistributionRequest {
   platforms: PlatformId[];
   mode: PublishMode;
   jikeCircle?: string;
+  reuseExistingGroup?: boolean;
   createdAt: number;
 }
 

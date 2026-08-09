@@ -486,7 +486,7 @@ function dispatchInputEvent(element: Element, inputType: string, data: string): 
   element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType, data }));
 }
 
-function isEditableTextMatch(element: Element, expectedText: string): boolean {
+export function isEditableTextMatch(element: Element, expectedText: string): boolean {
   return normalizeEditableSnapshot(getEditablePlainText(element)) === normalizeEditableSnapshot(expectedText);
 }
 

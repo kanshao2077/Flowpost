@@ -4,8 +4,8 @@ export default defineConfig({
   modules: ["@wxt-dev/module-react"],
   manifest: {
     name: "来一发 FlowPost",
-    description: "Fill and optionally publish text plus up to nine images to X, LinkedIn, Jike, and Substack Notes.",
-    version: "0.1.2",
+    description: "Fill and optionally publish text plus up to nine images to Jike, X, Xiaohongshu, Douyin, WeChat Channels, Watcha, Substack, and LinkedIn.",
+    version: "0.1.6",
     permissions: ["storage", "tabs", "tabGroups", "windows", "unlimitedStorage"],
     host_permissions: [
       "https://x.com/*",
@@ -14,7 +14,11 @@ export default defineConfig({
       "https://web.okjike.com/*",
       "https://*.okjike.com/*",
       "https://substack.com/*",
-      "https://*.substack.com/*"
+      "https://*.substack.com/*",
+      "https://creator.xiaohongshu.com/*",
+      "https://creator.douyin.com/*",
+      "https://channels.weixin.qq.com/*",
+      "https://watcha.cn/*"
     ],
     icons: {
       "16": "icons/icon16.png",

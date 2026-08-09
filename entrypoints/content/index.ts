@@ -15,7 +15,11 @@ export default defineContentScript({
     "https://web.okjike.com/*",
     "https://*.okjike.com/*",
     "https://substack.com/*",
-    "https://*.substack.com/*"
+    "https://*.substack.com/*",
+    "https://creator.xiaohongshu.com/*",
+    "https://creator.douyin.com/*",
+    "https://channels.weixin.qq.com/*",
+    "https://watcha.cn/*"
   ],
   runAt: "document_idle",
   main() {

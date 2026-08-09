@@ -6,6 +6,7 @@ import {
   describeError,
   ensureEditableTextMatches,
   findVisibleElementByText,
+  isEditableTextMatch,
   isDisabled,
   isVisible,
   normalizeText,
@@ -17,7 +18,7 @@ import {
   uploadImagesFromDataUrls,
   waitForAnyVisible
 } from "./dom";
-import type { EditableTextStrategy } from "./dom";
+import type { EditableTextOptions, EditableTextStrategy } from "./dom";
 
 export interface PlatformAdapter {
   id: PlatformId;
@@ -38,11 +39,14 @@ export interface PlatformAdapterConfig {
   publishTexts: string[];
   loginSelectors?: string[];
   loginTexts?: string[];
+  loginReadySelectors?: string[];
+  getText?: (payload: PlatformFillPayload) => string;
   beforeFill?: (payload: PlatformFillPayload) => Promise<string | undefined>;
   afterFill?: (payload: PlatformFillPayload) => Promise<string | undefined>;
   editorTimeoutMs?: number;
   afterOpenDelayMs?: number;
   afterFillDelayMs?: number;
+  afterImageUploadDelayMs?: number;
   preferLineByLineText?: boolean;
   disableLineByLineText?: boolean;
   directDuplicateRepair?: boolean;
@@ -53,11 +57,15 @@ export interface PlatformAdapterConfig {
   forceDirectText?: boolean;
   refreshBeforePublish?: boolean;
   restoreTextAfterImageUpload?: boolean;
+  uploadImagesBeforeEditor?: boolean;
 }
 
 const BUTTON_LIKE_SELECTORS = ["button", "[role='button']", "a", "div[role='button']"];
 const PUBLISH_BUTTON_TIMEOUT_MS = 6_000;
 const PUBLISH_BUTTON_POLL_MS = 300;
+const TEXT_STABILITY_TIMEOUT_MS = 5_000;
+const TEXT_STABILITY_POLL_MS = 500;
+const REQUIRED_STABLE_TEXT_CHECKS = 3;
 
 type PublishButtonSearchResult =
   | { status: "ready"; button: HTMLElement }
@@ -68,14 +76,15 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
     id: config.id,
     async checkLogin() {
       try {
-        if (looksLoggedOut(config) && !queryFirstVisible(config.editorSelectors)) {
+        const readySelectors = [...config.editorSelectors, ...(config.loginReadySelectors ?? [])];
+        if (looksLoggedOut(config) && !queryFirstVisible(readySelectors)) {
           return result(config.id, "needs-login", makeLoginMessage(config.label));
         }
 
         await openComposerIfNeeded(config);
 
-        const editor = await waitForAnyVisible(config.editorSelectors, Math.min(config.editorTimeoutMs ?? 18_000, 10_000));
-        if (editor && !looksLoggedOut(config)) {
+        const readyElement = await waitForAnyVisible(readySelectors, Math.min(config.editorTimeoutMs ?? 18_000, 10_000));
+        if (readyElement && !looksLoggedOut(config)) {
           return result(config.id, "ready", `${config.label} 已登录，可以开始分发。`);
         }
 
@@ -94,15 +103,28 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
     },
     async fill(payload) {
       try {
-        if (looksLoggedOut(config) && !queryFirstVisible(config.editorSelectors)) {
+        const readySelectors = [...config.editorSelectors, ...(config.loginReadySelectors ?? [])];
+        if (looksLoggedOut(config) && !queryFirstVisible(readySelectors)) {
           return result(config.id, "needs-login", makeLoginMessage(config.label));
         }
 
         await openComposerIfNeeded(config);
 
         const warnings: string[] = [];
+        const textToFill = config.getText?.(payload) ?? payload.text;
         const beforeFillWarning = await runOptionalStep(config.beforeFill, payload);
         if (beforeFillWarning) warnings.push(beforeFillWarning);
+
+        const images = getPayloadImages(payload);
+        const imagesUploadedBeforeEditor = Boolean(config.uploadImagesBeforeEditor && images.length);
+        if (imagesUploadedBeforeEditor) {
+          try {
+            await uploadPayloadImages(config, images);
+            await sleep(config.afterImageUploadDelayMs ?? 1_800);
+          } catch (error) {
+            return result(config.id, "manual", makeImageUploadMessage(config.label, error, images.length, false));
+          }
+        }
 
         let editor = await waitForAnyVisible(config.editorSelectors, config.editorTimeoutMs ?? 18_000);
         const textOptions = {
@@ -113,11 +135,11 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
           preferHtml: config.preferHtmlText,
           forceDirect: config.forceDirectText
         };
-        setEditableText(editor, payload.text, textOptions);
+        setEditableText(editor, textToFill, textOptions);
         await sleep(config.afterFillDelayMs ?? 700);
 
         if (
-          repairEditableTextIfDuplicated(editor, payload.text, {
+          repairEditableTextIfDuplicated(editor, textToFill, {
             ...textOptions,
             preferLineByLine: config.directDuplicateRepair ? false : true,
             forceDirect: config.directDuplicateRepair
@@ -127,33 +149,27 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
         }
 
         if (config.verifyTextAfterFill !== false) {
-          const fullTextFilled = await ensureEditableTextMatches(editor, payload.text, textOptions);
+          const fullTextFilled = await ensureEditableTextMatches(editor, textToFill, textOptions);
           if (!fullTextFilled) return result(config.id, "manual", makeTextMismatchMessage(config.label));
         }
 
         const afterFillWarning = await runOptionalStep(config.afterFill, payload);
         if (afterFillWarning) warnings.push(afterFillWarning);
 
-        const images = getPayloadImages(payload);
-        if (images.length) {
+        const shouldProtectText = Boolean(images.length && !imagesUploadedBeforeEditor && config.restoreTextAfterImageUpload);
+        if (images.length && !imagesUploadedBeforeEditor) {
           try {
-            await uploadImagesFromDataUrls({
-              images,
-              inputSelectors: config.imageInputSelectors,
-              openerSelectors: config.imageButtonSelectors,
-              openerTexts: config.imageButtonTexts,
-              openerTextSelectors: BUTTON_LIKE_SELECTORS
-            });
-            if (config.restoreTextAfterImageUpload) {
-              await sleep(500);
-              editor = queryFirstVisible(config.editorSelectors) ?? editor;
-              const textStillPresent = await ensureEditableTextMatches(editor, payload.text, textOptions);
-              if (!textStillPresent) {
-                return result(config.id, "manual", makeTextLostAfterImageMessage(config.label));
-              }
-            }
+            await uploadPayloadImages(config, images);
           } catch (error) {
-            return result(config.id, "manual", makeImageUploadMessage(config.label, error, images.length));
+            return result(config.id, "manual", makeImageUploadMessage(config.label, error, images.length, true));
+          }
+
+          if (shouldProtectText) {
+            const protectedText = await ensureStableEditorText(config, textToFill, textOptions);
+            if (!protectedText.ok) {
+              return result(config.id, "manual", makeTextLostAfterImageMessage(config.label));
+            }
+            editor = protectedText.editor;
           }
         }
 
@@ -176,9 +192,33 @@ export function createGenericAdapter(config: PlatformAdapterConfig): PlatformAda
           return result(config.id, "manual", makePublishButtonMessage(config.label, publishButton.status));
         }
 
-        clickElement(publishButton.button);
+        let buttonToClick = publishButton.button;
+        if (shouldProtectText) {
+          const protectedText = await ensureStableEditorText(config, textToFill, textOptions);
+          if (!protectedText.ok) {
+            return result(config.id, "manual", makeTextUnsafeBeforePublishMessage(config.label));
+          }
+
+          const currentPublishButton = findPublishButton(config);
+          const currentEditor = queryFirstVisible(config.editorSelectors);
+          if (
+            currentPublishButton.status !== "ready" ||
+            !currentEditor ||
+            !isEditableTextMatch(currentEditor, textToFill)
+          ) {
+            return result(config.id, "manual", makeTextUnsafeBeforePublishMessage(config.label));
+          }
+
+          buttonToClick = currentPublishButton.button;
+        }
+
+        clickElement(buttonToClick);
         await sleep(1_000);
-        return result(config.id, "published", `${config.label} 已点击发布按钮。`);
+        return result(
+          config.id,
+          "publish-pending",
+          `${config.label} 已点击发布按钮，但 FlowPost 还不能确认内容已经公开。请在平台页面确认后标记为发布成功。`
+        );
       } catch (error) {
         if (looksLoggedOut(config)) {
           return result(config.id, "needs-login", makeLoginMessage(config.label));
@@ -198,18 +238,33 @@ function makeTextLostAfterImageMessage(label: string): string {
   return `${label} 图片上传后正文丢失或不完整：已尝试补回但没有成功，请先检查正文再发布。`;
 }
 
-function makeImageUploadMessage(label: string, error: unknown, imageCount: number): string {
+function makeTextUnsafeBeforePublishMessage(label: string): string {
+  return `${label} 发布前正文丢失或不稳定：已停止自动发布，请检查正文后手动发布。`;
+}
+
+function makeImageUploadMessage(label: string, error: unknown, imageCount: number, textAlreadyFilled: boolean): string {
   const detail = describeError(error);
+  const prefix = textAlreadyFilled ? `${label} 正文已填入，但` : `${label} `;
 
   if (detail.includes("找不到图片上传入口")) {
-    return `${label} 正文已填入，但没有找到图片上传入口：可能是图片按钮没加载或平台页面结构变化，请手动上传 ${imageCount} 张图片。`;
+    return `${prefix}没有找到图片上传入口：可能是图片按钮没加载或平台页面结构变化，请手动上传 ${imageCount} 张图片。`;
   }
 
   if (detail.includes("图片数据无效")) {
-    return `${label} 正文已填入，但图片数据无效：请重新选择或粘贴图片后再试。`;
+    return `${prefix}图片数据无效：请重新选择或粘贴图片后再试。`;
   }
 
-  return `${label} 正文已填入，但图片上传失败：${detail}。请检查图片后手动处理。`;
+  return `${prefix}图片上传失败：${detail}。请检查图片后手动处理。`;
+}
+
+async function uploadPayloadImages(config: PlatformAdapterConfig, images: PlatformFillPayload["images"]): Promise<void> {
+  await uploadImagesFromDataUrls({
+    images,
+    inputSelectors: config.imageInputSelectors,
+    openerSelectors: config.imageButtonSelectors,
+    openerTexts: config.imageButtonTexts,
+    openerTextSelectors: BUTTON_LIKE_SELECTORS
+  });
 }
 
 function makePublishButtonMessage(label: string, status: Exclude<PublishButtonSearchResult["status"], "ready">): string {
@@ -248,7 +303,7 @@ async function runOptionalStep(
 }
 
 async function openComposerIfNeeded(config: PlatformAdapterConfig): Promise<void> {
-  if (queryFirstVisible(config.editorSelectors)) return;
+  if (queryFirstVisible([...config.editorSelectors, ...(config.loginReadySelectors ?? [])])) return;
 
   const clicked = await clickFirstAvailable({
     selectors: config.openComposerSelectors,
@@ -267,13 +322,9 @@ async function waitForPublishButton(config: PlatformAdapterConfig): Promise<Publ
   let sawDisabledButton = false;
 
   while (Date.now() <= deadline) {
-    const direct = findClickableElementBySelectors(config.publishSelectors);
-    if (direct.button) return { status: "ready", button: direct.button };
-    if (direct.sawDisabled) sawDisabledButton = true;
-
-    const byText = findClickableElementByText(BUTTON_LIKE_SELECTORS, config.publishTexts);
-    if (byText.button) return { status: "ready", button: byText.button };
-    if (byText.sawDisabled) sawDisabledButton = true;
+    const current = findPublishButton(config);
+    if (current.status === "ready") return current;
+    if (current.status === "disabled") sawDisabledButton = true;
 
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) break;
@@ -281,6 +332,49 @@ async function waitForPublishButton(config: PlatformAdapterConfig): Promise<Publ
   }
 
   return { status: sawDisabledButton ? "disabled" : "missing" };
+}
+
+function findPublishButton(config: PlatformAdapterConfig): PublishButtonSearchResult {
+  const direct = findClickableElementBySelectors(config.publishSelectors);
+  if (direct.button) return { status: "ready", button: direct.button };
+
+  const byText = findClickableElementByText(BUTTON_LIKE_SELECTORS, config.publishTexts);
+  if (byText.button) return { status: "ready", button: byText.button };
+
+  return { status: direct.sawDisabled || byText.sawDisabled ? "disabled" : "missing" };
+}
+
+async function ensureStableEditorText(
+  config: PlatformAdapterConfig,
+  expectedText: string,
+  textOptions: EditableTextOptions
+): Promise<{ ok: true; editor: HTMLElement } | { ok: false }> {
+  const deadline = Date.now() + TEXT_STABILITY_TIMEOUT_MS;
+  let consecutiveMatches = 0;
+  let lastMatchedEditor: HTMLElement | undefined;
+
+  while (Date.now() <= deadline) {
+    const editor = queryFirstVisible<HTMLElement>(config.editorSelectors);
+
+    if (!editor) {
+      consecutiveMatches = 0;
+      lastMatchedEditor = undefined;
+    } else if (isEditableTextMatch(editor, expectedText)) {
+      consecutiveMatches = editor === lastMatchedEditor ? consecutiveMatches + 1 : 1;
+      lastMatchedEditor = editor;
+      if (consecutiveMatches >= REQUIRED_STABLE_TEXT_CHECKS) return { ok: true, editor };
+    } else {
+      consecutiveMatches = 0;
+      lastMatchedEditor = undefined;
+      await ensureEditableTextMatches(editor, expectedText, textOptions);
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await sleep(Math.min(TEXT_STABILITY_POLL_MS, remainingMs));
+  }
+
+  return { ok: false };
 }
 
 function findClickableElementBySelectors(selectors: string[]): { button?: HTMLElement; sawDisabled: boolean } {

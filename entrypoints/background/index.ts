@@ -5,6 +5,7 @@ import {
   isRuntimeMessage,
   type CheckLoginsResponse,
   type CheckPlatformLoginResponse,
+  type ConfirmPlatformPublishedResponse,
   type FillPlatformResponse,
   type GetJobStateResponse,
   type StartDistributionResponse,
@@ -14,6 +15,8 @@ import { getJobState, saveDraft, saveJobState } from "../../src/shared/storage";
 import type { DistributionRequest, JobState, PlatformFillPayload, PlatformResult } from "../../src/shared/types";
 
 const cancelledJobIds = new Set<string>();
+const DISTRIBUTION_TAB_GROUP_STORAGE_KEY = "contentDistributor:distributionTabGroupId";
+const DISTRIBUTION_TAB_GROUP_TITLE = "FlowPost 分发";
 
 export default defineBackground(() => {
   browser.action.onClicked.addListener(() => {
@@ -51,6 +54,14 @@ export default defineBackground(() => {
       void checkPlatformLogins(message.payload.platforms)
         .then((results): CheckLoginsResponse => ({ ok: true, results }))
         .catch((error): CheckLoginsResponse => ({ ok: false, error: describeError(error) }))
+        .then(sendResponse);
+      return true;
+    }
+
+    if (message.type === MESSAGE_TYPES.CONFIRM_PLATFORM_PUBLISHED) {
+      void confirmPlatformPublished(message.payload.jobId, message.payload.platform)
+        .then((job): ConfirmPlatformPublishedResponse => ({ ok: true, job }))
+        .catch((error): ConfirmPlatformPublishedResponse => ({ ok: false, error: describeError(error) }))
         .then(sendResponse);
       return true;
     }
@@ -103,7 +114,10 @@ async function runDistribution(request: DistributionRequest): Promise<JobState> 
 
   await saveJobState(job);
 
-  let tabGroupId: number | undefined;
+  if (!request.reuseExistingGroup) await clearDistributionTabGroupId();
+  let tabGroupId = request.reuseExistingGroup ? await getStoredDistributionTabGroupId() : undefined;
+  let distributionWindowId = await getTabGroupWindowId(tabGroupId);
+  if (tabGroupId !== undefined && distributionWindowId === undefined) tabGroupId = undefined;
 
   for (const platform of request.platforms) {
     if (await isJobCancelled(request.id)) return (await getJobState()) ?? job;
@@ -115,10 +129,15 @@ async function runDistribution(request: DistributionRequest): Promise<JobState> 
     try {
       if (await isJobCancelled(request.id)) return (await getJobState()) ?? job;
 
-      const tab = await browser.tabs.create({ url: definition.composeUrl, active: true });
+      const tab = await browser.tabs.create({
+        url: definition.composeUrl,
+        active: true,
+        ...(distributionWindowId !== undefined ? { windowId: distributionWindowId } : {})
+      });
       if (!tab.id) throw new Error("浏览器没有返回新标签页 ID");
 
-      tabGroupId = await addTabToDistributionGroup(tab.id, tabGroupId);
+      tabGroupId = await addTabToDistributionGroup(tab.id, tabGroupId, true);
+      distributionWindowId = tab.windowId;
 
       job = upsertResult(
         job,
@@ -205,7 +224,7 @@ async function checkPlatformLogins(platforms: PlatformFillPayload["platform"][])
       const tab = await browser.tabs.create({ url: definition.composeUrl, active: true });
       if (!tab.id) throw new Error("浏览器没有返回新标签页 ID");
 
-      tabGroupId = await addTabToDistributionGroup(tab.id, tabGroupId);
+      tabGroupId = await addTabToDistributionGroup(tab.id, tabGroupId, false);
       await waitForTabComplete(tab.id, `login-check-${platform}`);
 
       const response = await sendLoginCheckMessageWithRetry(tab.id, platform);
@@ -222,29 +241,124 @@ async function checkPlatformLogins(platforms: PlatformFillPayload["platform"][])
   return results;
 }
 
+async function confirmPlatformPublished(
+  jobId: string,
+  platform: PlatformFillPayload["platform"]
+): Promise<JobState> {
+  const job = await getJobState();
+  if (!job || job.id !== jobId) throw new Error("当前任务已经变化，请以最新日志为准。");
+  if (job.status === "running") throw new Error("任务仍在处理中，请等待全部平台处理完成后再确认。");
+
+  const currentResult = job.results.find((result) => result.platform === platform);
+  if (!currentResult) throw new Error("当前任务里没有这个平台的结果。");
+  if (currentResult.status === "published") return job;
+
+  let currentUrl = currentResult.url;
+  if (currentResult.tabId !== undefined) {
+    try {
+      currentUrl = (await browser.tabs.get(currentResult.tabId)).url ?? currentUrl;
+    } catch {
+      // The user may close the platform tab before confirming; keep the last known URL.
+    }
+  }
+
+  const nextResult: PlatformResult = {
+    ...currentResult,
+    status: "published",
+    message: `${getPlatform(platform).label} 已由你确认为发布成功。`,
+    url: currentUrl,
+    at: Date.now()
+  };
+  const nextJob = upsertResult(job, nextResult);
+  await saveJobState(nextJob);
+  return nextJob;
+}
+
 async function isJobCancelled(jobId: string): Promise<boolean> {
   if (cancelledJobIds.has(jobId)) return true;
   const job = await getJobState();
   return job?.id === jobId && job.status === "cancelled";
 }
 
-async function addTabToDistributionGroup(tabId: number, groupId: number | undefined): Promise<number | undefined> {
-  try {
-    const nextGroupId =
-      groupId === undefined
-        ? await browser.tabs.group({ tabIds: tabId })
-        : await browser.tabs.group({ groupId, tabIds: tabId });
+async function addTabToDistributionGroup(
+  tabId: number,
+  groupId: number | undefined,
+  persistGroupId: boolean
+): Promise<number | undefined> {
+  const reusableGroupId = await getReusableTabGroupId(tabId, groupId);
 
-    if (groupId === undefined) {
-      await browser.tabGroups.update(nextGroupId, {
-        title: "FlowPost 分发",
-        color: "yellow"
-      });
+  if (reusableGroupId !== undefined) {
+    try {
+      await browser.tabs.group({ groupId: reusableGroupId, tabIds: tabId });
+      return reusableGroupId;
+    } catch {
+      // The group may have disappeared after validation. Create a replacement below.
+    }
+  }
+
+  try {
+    const nextGroupId = await browser.tabs.group({ tabIds: tabId });
+    await browser.tabGroups.update(nextGroupId, {
+      title: DISTRIBUTION_TAB_GROUP_TITLE,
+      color: "yellow"
+    });
+
+    if (persistGroupId) {
+      try {
+        await saveDistributionTabGroupId(nextGroupId);
+      } catch {
+        // Grouping should still succeed if storage is temporarily unavailable.
+      }
     }
 
     return nextGroupId;
   } catch {
-    return groupId;
+    return reusableGroupId;
+  }
+}
+
+async function getStoredDistributionTabGroupId(): Promise<number | undefined> {
+  try {
+    const result = await browser.storage.local.get(DISTRIBUTION_TAB_GROUP_STORAGE_KEY);
+    const groupId = result[DISTRIBUTION_TAB_GROUP_STORAGE_KEY];
+    return typeof groupId === "number" && Number.isInteger(groupId) && groupId >= 0 ? groupId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function saveDistributionTabGroupId(groupId: number): Promise<void> {
+  await browser.storage.local.set({
+    [DISTRIBUTION_TAB_GROUP_STORAGE_KEY]: groupId
+  });
+}
+
+async function clearDistributionTabGroupId(): Promise<void> {
+  try {
+    await browser.storage.local.remove(DISTRIBUTION_TAB_GROUP_STORAGE_KEY);
+  } catch {
+    // A stale pointer is harmless because a new distribution never reads it.
+  }
+}
+
+async function getReusableTabGroupId(tabId: number, groupId: number | undefined): Promise<number | undefined> {
+  if (groupId === undefined) return undefined;
+
+  try {
+    const [tab, group] = await Promise.all([browser.tabs.get(tabId), browser.tabGroups.get(groupId)]);
+    return tab.windowId === group.windowId ? groupId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function getTabGroupWindowId(groupId: number | undefined): Promise<number | undefined> {
+  if (groupId === undefined) return undefined;
+
+  try {
+    return (await browser.tabGroups.get(groupId)).windowId;
+  } catch {
+    return undefined;
   }
 }
 

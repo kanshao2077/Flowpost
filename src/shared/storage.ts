@@ -1,10 +1,11 @@
 import { browser } from "wxt/browser";
-import { DEFAULT_JIKE_CIRCLE, DEFAULT_PLATFORMS } from "./platforms";
+import { DEFAULT_JIKE_CIRCLE, DEFAULT_PLATFORMS, PLATFORM_ORDER, type PlatformId } from "./platforms";
 import type { DraftSnapshot, JobState } from "./types";
 
 const STORAGE_KEYS = {
   DRAFT: "contentDistributor:draft",
-  JOB: "contentDistributor:job"
+  JOB: "contentDistributor:job",
+  HIDDEN_PLATFORMS: "contentDistributor:hiddenPlatforms"
 } as const;
 
 export const DEFAULT_DRAFT: DraftSnapshot = {
@@ -47,6 +48,20 @@ export async function getJobState(): Promise<JobState | undefined> {
 export async function saveJobState(job: JobState): Promise<void> {
   await browser.storage.local.set({
     [STORAGE_KEYS.JOB]: job
+  });
+}
+
+export async function getHiddenPlatforms(): Promise<PlatformId[]> {
+  const result = await browser.storage.local.get(STORAGE_KEYS.HIDDEN_PLATFORMS);
+  const stored = result[STORAGE_KEYS.HIDDEN_PLATFORMS];
+  if (!Array.isArray(stored)) return [];
+
+  return PLATFORM_ORDER.filter((platform) => stored.includes(platform));
+}
+
+export async function saveHiddenPlatforms(platforms: PlatformId[]): Promise<void> {
+  await browser.storage.local.set({
+    [STORAGE_KEYS.HIDDEN_PLATFORMS]: PLATFORM_ORDER.filter((platform) => platforms.includes(platform))
   });
 }
 
